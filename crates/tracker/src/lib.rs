@@ -48,7 +48,7 @@ impl TrackerClient {
         // Send connection request with timeout
         socket.send(&connect_req).await?;
         let mut connect_resp = [0u8; 16];
-        let _ = timeout(Duration::from_secs(5), socket.recv(&mut connect_resp)).await??;
+        let _ = timeout(Duration::from_secs(15), socket.recv(&mut connect_resp)).await??;
 
         let resp_action = u32::from_be_bytes([
             connect_resp[0],
@@ -76,20 +76,20 @@ impl TrackerClient {
         announce_req.extend_from_slice(&announce_transaction_id.to_be_bytes());
         announce_req.extend_from_slice(&info_hash);
         announce_req.extend_from_slice(&peer_id);
-        announce_req.extend_from_slice(&0i64.to_be_bytes()); // downloaded (0)
-        announce_req.extend_from_slice(&0i64.to_be_bytes()); // left (0)
-        announce_req.extend_from_slice(&0i64.to_be_bytes()); // uploaded (0)
+        announce_req.extend_from_slice(&0i64.to_be_bytes()); // downloaded
+        announce_req.extend_from_slice(&i64::MAX.to_be_bytes()); // left (unknown)
+        announce_req.extend_from_slice(&0i64.to_be_bytes()); // uploaded
         announce_req.extend_from_slice(&0u32.to_be_bytes()); // event: none (0)
         announce_req.extend_from_slice(&0u32.to_be_bytes()); // ip address: default (0)
         announce_req.extend_from_slice(&rand_u32().to_be_bytes()); // key
         announce_req.extend_from_slice(&(-1i32).to_be_bytes()); // num_want: default (-1)
-        announce_req.extend_from_slice(&(port as u32).to_be_bytes()); // port
+        announce_req.extend_from_slice(&port.to_be_bytes()); // port (u16 - 2 bytes per spec)
 
         socket.send(&announce_req).await?;
 
         // Receives announce response
         let mut announce_resp = vec![0u8; 4096];
-        let n = timeout(Duration::from_secs(5), socket.recv(&mut announce_resp)).await??;
+        let n = timeout(Duration::from_secs(15), socket.recv(&mut announce_resp)).await??;
         if n < 20 {
             anyhow::bail!("Tracker announce response too short");
         }
