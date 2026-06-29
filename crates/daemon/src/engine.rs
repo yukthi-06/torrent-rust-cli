@@ -85,6 +85,29 @@ impl TorrentDownloader {
                             }
                             Err(e) => {
                                 error!("Tracker announce failed for {}: {}", tracker_url, e);
+                                // Fallback: try same tracker over HTTP
+                                let http_fallback = tracker_url.replace("udp://", "http://");
+                                info!("Trying HTTP fallback: {}", http_fallback);
+                                match tracker
+                                    .announce_http(
+                                        &http_fallback,
+                                        self.meta.info_hash.0,
+                                        self.peer_id,
+                                        6881,
+                                    )
+                                    .await
+                                {
+                                    Ok(p) => {
+                                        if !p.is_empty() {
+                                            peers = p;
+                                            info!("HTTP fallback {} returned {} peers", http_fallback, peers.len());
+                                            break;
+                                        }
+                                    }
+                                    Err(he) => {
+                                        error!("HTTP fallback failed for {}: {}", http_fallback, he);
+                                    }
+                                }
                             }
                         }
                     } else if tracker_url.starts_with("http://") {
