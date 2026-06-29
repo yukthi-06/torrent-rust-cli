@@ -9,9 +9,9 @@ pub trait IpcStream: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
 impl IpcStream for tokio::net::UnixStream {}
 
 #[cfg(windows)]
-impl IpcStream for tokio::net::windows::named_pipe::NamedPipeClientStream {}
+impl IpcStream for tokio::net::windows::named_pipe::NamedPipeClient {}
 #[cfg(windows)]
-impl IpcStream for tokio::net::windows::named_pipe::NamedPipeServerStream {}
+impl IpcStream for tokio::net::windows::named_pipe::NamedPipeServer {}
 
 /// Helper to read a packet from an IpcStream.
 /// Format: [Version: 1 byte] [Command: 4 bytes] [Length: 4 bytes] [Payload: Length bytes]
@@ -53,7 +53,7 @@ pub enum ClientConnection {
     #[cfg(unix)]
     Unix(tokio::net::UnixStream),
     #[cfg(windows)]
-    Windows(tokio::net::windows::named_pipe::NamedPipeClientStream),
+    Windows(tokio::net::windows::named_pipe::NamedPipeClient),
 }
 
 impl AsyncRead for ClientConnection {
@@ -111,7 +111,7 @@ pub enum ServerConnection {
     #[cfg(unix)]
     Unix(tokio::net::UnixStream),
     #[cfg(windows)]
-    Windows(tokio::net::windows::named_pipe::NamedPipeServerStream),
+    Windows(tokio::net::windows::named_pipe::NamedPipeServer),
 }
 
 impl AsyncRead for ServerConnection {
