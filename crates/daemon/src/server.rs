@@ -242,8 +242,9 @@ impl RpcServer {
                         || err_str.contains("connection reset")
                         || err_str.contains("Broken pipe")
                         || err_str.contains("Failed to read request packet")
-                        || err_str.contains("os error 109") // Windows: pipe broken
-                        || err_str.contains("os error 232") // Windows: pipe closed
+                        // Windows: pipe broken or closed
+                        || err_str.contains("os error 109")
+                        || err_str.contains("os error 232")
                     {
                         break;
                     }
