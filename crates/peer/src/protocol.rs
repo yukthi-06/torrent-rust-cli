@@ -71,7 +71,6 @@ pub enum PeerMessage {
         begin: u32,
         length: u32,
     },
-
 }
 
 impl PeerMessage {
