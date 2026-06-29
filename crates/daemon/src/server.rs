@@ -141,7 +141,10 @@ impl RpcServer {
             peer_id,
             torrent_state,
         ));
-        info!("Resumed torrent ID {} ({} bytes already downloaded)", id, downloaded);
+        info!(
+            "Resumed torrent ID {} ({} bytes already downloaded)",
+            id, downloaded
+        );
         downloader.start().await;
     }
 
@@ -343,10 +346,8 @@ impl RpcServer {
                 {
                     let mut saved = self.saved_paths.lock().await;
                     saved.insert(new_id.0, path_or_magnet.clone());
-                    let entries: Vec<(u32, String, u64)> = saved
-                        .iter()
-                        .map(|(k, v)| (*k, v.clone(), 0u64))
-                        .collect();
+                    let entries: Vec<(u32, String, u64)> =
+                        saved.iter().map(|(k, v)| (*k, v.clone(), 0u64)).collect();
                     save_state(&entries);
                 }
 
