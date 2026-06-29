@@ -142,6 +142,32 @@ impl RpcServer {
                     peers_connected: 42,
                 }])
             }
+            Request::Add { .. } => Response::TorrentAdded { id: TorrentId(2) },
+            Request::Remove { .. } => Response::TorrentRemoved,
+            Request::Pause { .. } => Response::Ok,
+            Request::Resume { .. } => Response::Ok,
+            Request::Verify { .. } => Response::Ok,
+            Request::Create { .. } => Response::Ok,
+            Request::Info { id } => Response::Info(format!(
+                "Mock Info for Torrent ID {}:\n  Status: Active\n  Downloaded: 1.2 GB\n  Uploaded: 300 MB",
+                id
+            )),
+            Request::Status { id } => {
+                let status_id = id.unwrap_or(TorrentId(1));
+                Response::TorrentStatus(TorrentStatus {
+                    id: status_id,
+                    name: "ubuntu-24.04-desktop-amd64.iso".to_string(),
+                    info_hash: "d24b611e85ae6574f8cb4edca0f2b3e8114f62bf".to_string(),
+                    size: 4398301184,
+                    downloaded: 2199150592,
+                    uploaded: 12345678,
+                    status: "Downloading".to_string(),
+                    progress: 50.0,
+                    download_rate: 5120000,
+                    upload_rate: 250000,
+                    peers_connected: 42,
+                })
+            }
             Request::Stats => Response::Stats(SystemStats {
                 download_rate: 5120000,
                 upload_rate: 250000,
@@ -152,10 +178,6 @@ impl RpcServer {
             Request::GetConfig => {
                 Response::Config("download_dir = \"downloads\"\nlisten_port = 6881\n".to_string())
             }
-            _ => Response::Error(format!(
-                "Command {:?} is not yet fully implemented in this milestone",
-                request
-            )),
         }
     }
 }
