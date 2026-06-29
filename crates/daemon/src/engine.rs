@@ -62,32 +62,33 @@ impl TorrentDownloader {
                 .map(|i| i as u32)
                 .unwrap_or(total_pieces);
 
-            let verified_downloaded = completed_pieces.iter().enumerate().fold(
-                0u64,
-                |acc, (i, &done)| {
-                    if done {
-                        let piece_len = if i as u32 == total_pieces - 1 {
-                            // Last piece may be shorter
-                            let total_size = {
-                                match &self.meta.info.mode {
-                                    FileMode::Single { length } => *length,
-                                    FileMode::Multi { files } => {
-                                        files.iter().map(|f| f.length).sum()
+            let verified_downloaded =
+                completed_pieces
+                    .iter()
+                    .enumerate()
+                    .fold(0u64, |acc, (i, &done)| {
+                        if done {
+                            let piece_len = if i as u32 == total_pieces - 1 {
+                                // Last piece may be shorter
+                                let total_size = {
+                                    match &self.meta.info.mode {
+                                        FileMode::Single { length } => *length,
+                                        FileMode::Multi { files } => {
+                                            files.iter().map(|f| f.length).sum()
+                                        }
                                     }
-                                }
+                                };
+                                let full_pieces_size =
+                                    (total_pieces as u64 - 1) * self.meta.info.piece_length;
+                                total_size - full_pieces_size
+                            } else {
+                                self.meta.info.piece_length
                             };
-                            let full_pieces_size =
-                                (total_pieces as u64 - 1) * self.meta.info.piece_length;
-                            total_size - full_pieces_size
+                            acc + piece_len
                         } else {
-                            self.meta.info.piece_length
-                        };
-                        acc + piece_len
-                    } else {
-                        acc
-                    }
-                },
-            );
+                            acc
+                        }
+                    });
 
             {
                 let mut lock = self.state.lock().await;
@@ -251,10 +252,7 @@ impl TorrentDownloader {
             let piece_data = match self.read_piece_from_disk(piece_start, actual_len) {
                 Ok(d) => d,
                 Err(e) => {
-                    warn!(
-                        "Piece {}: failed to read from disk: {}",
-                        piece_idx, e
-                    );
+                    warn!("Piece {}: failed to read from disk: {}", piece_idx, e);
                     continue;
                 }
             };
