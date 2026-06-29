@@ -212,7 +212,7 @@ mod tests {
     fn test_parse_single_file_torrent() {
         // Construct a mock single-file torrent bencoded payload:
         // d
-        //   8:announce 43:http://torrent.ubuntu.com:6969/announce
+        //   8:announce 39:http://torrent.ubuntu.com:6969/announce
         //   4:info d
         //     6:length i42e
         //     4:name 10:ubuntu.iso
@@ -220,7 +220,7 @@ mod tests {
         //     6:pieces 20:abcdefghijklmnopqrst
         //   e
         // e
-        let data = b"d8:announce43:http://torrent.ubuntu.com:6969/announce4:infod6:lengthi42e4:name10:ubuntu.iso12:piece lengthi16384e6:pieces20:abcdefghijklmnopqrstee";
+        let data = b"d8:announce39:http://torrent.ubuntu.com:6969/announce4:infod6:lengthi42e4:name10:ubuntu.iso12:piece lengthi16384e6:pieces20:abcdefghijklmnopqrstee";
 
         let meta = TorrentMeta::from_bytes(data).unwrap();
         assert_eq!(meta.announce, "http://torrent.ubuntu.com:6969/announce");
