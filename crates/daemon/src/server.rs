@@ -34,7 +34,6 @@ impl RpcServer {
         }
     }
 
-
     pub async fn run(
         self: Arc<Self>,
         mut shutdown_rx: tokio::sync::watch::Receiver<bool>,

@@ -52,11 +52,26 @@ pub enum PeerMessage {
     Unchoke,
     Interested,
     NotInterested,
-    Have { index: u32 },
+    Have {
+        index: u32,
+    },
     Bitfield(Vec<u8>),
-    Request { index: u32, begin: u32, length: u32 },
-    Piece { index: u32, begin: u32, block: Vec<u8> },
-    Cancel { index: u32, begin: u32, length: u32 },
+    Request {
+        index: u32,
+        begin: u32,
+        length: u32,
+    },
+    Piece {
+        index: u32,
+        begin: u32,
+        block: Vec<u8>,
+    },
+    Cancel {
+        index: u32,
+        begin: u32,
+        length: u32,
+    },
+
 }
 
 impl PeerMessage {
@@ -93,14 +108,22 @@ impl PeerMessage {
                 buf.push(5);
                 buf.extend_from_slice(bits);
             }
-            PeerMessage::Request { index, begin, length } => {
+            PeerMessage::Request {
+                index,
+                begin,
+                length,
+            } => {
                 buf.extend_from_slice(&13u32.to_be_bytes());
                 buf.push(6);
                 buf.extend_from_slice(&index.to_be_bytes());
                 buf.extend_from_slice(&begin.to_be_bytes());
                 buf.extend_from_slice(&length.to_be_bytes());
             }
-            PeerMessage::Piece { index, begin, block } => {
+            PeerMessage::Piece {
+                index,
+                begin,
+                block,
+            } => {
                 let len = (9 + block.len()) as u32;
                 buf.extend_from_slice(&len.to_be_bytes());
                 buf.push(7);
@@ -108,7 +131,11 @@ impl PeerMessage {
                 buf.extend_from_slice(&begin.to_be_bytes());
                 buf.extend_from_slice(block);
             }
-            PeerMessage::Cancel { index, begin, length } => {
+            PeerMessage::Cancel {
+                index,
+                begin,
+                length,
+            } => {
                 buf.extend_from_slice(&13u32.to_be_bytes());
                 buf.push(8);
                 buf.extend_from_slice(&index.to_be_bytes());

@@ -41,8 +41,11 @@ impl TorrentDownloader {
 
     pub async fn start(self: Arc<Self>) {
         tokio::spawn(async move {
-            info!("Starting download worker for torrent: {}", self.meta.info.name);
-            
+            info!(
+                "Starting download worker for torrent: {}",
+                self.meta.info.name
+            );
+
             // 1. Initialize files on disk
             if let Err(e) = self.initialize_files() {
                 error!("Failed to initialize files for torrent {}: {}", self.id, e);
@@ -56,7 +59,10 @@ impl TorrentDownloader {
                 let peers = if self.meta.announce.starts_with("udp://") {
                     let host_port = self.meta.announce.trim_start_matches("udp://");
                     let tracker = TrackerClient::new();
-                    match tracker.announce_udp(host_port, self.meta.info_hash.0, self.peer_id, 6881).await {
+                    match tracker
+                        .announce_udp(host_port, self.meta.info_hash.0, self.peer_id, 6881)
+                        .await
+                    {
                         Ok(p) => p,
                         Err(e) => {
                             error!("Tracker announce failed for torrent {}: {}", self.id, e);
@@ -68,7 +74,11 @@ impl TorrentDownloader {
                     Vec::new()
                 };
 
-                info!("Discovered {} peers from tracker for torrent {}", peers.len(), self.id);
+                info!(
+                    "Discovered {} peers from tracker for torrent {}",
+                    peers.len(),
+                    self.id
+                );
 
                 // Start connection workers for each peer
                 for peer in peers {
@@ -123,7 +133,7 @@ impl TorrentDownloader {
 
     async fn handle_peer(&self, addr: SocketAddr) -> Result<(), anyhow::Error> {
         let mut stream = TcpStream::connect(addr).await?;
-        
+
         // Handshake
         let handshake = Handshake::new(self.meta.info_hash.0, self.peer_id);
         stream.write_all(&handshake.serialize()).await?;
@@ -134,7 +144,9 @@ impl TorrentDownloader {
         }
 
         // Send Interested and Unchoke
-        stream.write_all(&PeerMessage::Interested.serialize()).await?;
+        stream
+            .write_all(&PeerMessage::Interested.serialize())
+            .await?;
         stream.write_all(&PeerMessage::Unchoke.serialize()).await?;
 
         // Simple download loop from peer
@@ -155,10 +167,14 @@ impl TorrentDownloader {
                     };
                     stream.write_all(&req.serialize()).await?;
                 }
-                PeerMessage::Piece { index, begin, block } => {
+                PeerMessage::Piece {
+                    index,
+                    begin,
+                    block,
+                } => {
                     // Write block to disk
                     self.write_block(index, begin, &block)?;
-                    
+
                     // Update progress / downloaded bytes
                     let mut lock = self.state.lock().await;
                     lock.status = "Downloading".to_string();
@@ -184,7 +200,9 @@ impl TorrentDownloader {
                 let mut current_file_start = 0u64;
                 for f in files {
                     let file_len = f.length;
-                    if absolute_offset >= current_file_start && absolute_offset < current_file_start + file_len {
+                    if absolute_offset >= current_file_start
+                        && absolute_offset < current_file_start + file_len
+                    {
                         let mut full_path = parent_dir.clone();
                         for part in &f.path {
                             full_path.push(part);
