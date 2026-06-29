@@ -157,7 +157,6 @@ impl RpcServer {
                 "Command {:?} is not yet fully implemented in this milestone",
                 request
             )),
-
         }
     }
 }
