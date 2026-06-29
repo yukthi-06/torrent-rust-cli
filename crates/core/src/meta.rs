@@ -175,7 +175,6 @@ fn get_int(dict: &BTreeMap<Vec<u8>, Bencode>, key: &[u8]) -> Result<i64, MetaErr
     }
 }
 
-
 fn get_announce_list(dict: &BTreeMap<Vec<u8>, Bencode>) -> Option<Vec<Vec<String>>> {
     let val = dict.get(b"announce-list".as_ref())?;
     let outer_list = match val {
