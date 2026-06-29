@@ -287,6 +287,21 @@ impl RpcServer {
                     FileMode::Multi { files } => files.iter().map(|f| f.length).sum(),
                 };
 
+                // Reject duplicate torrents (same info_hash already loaded)
+                let info_hash_str = meta.info_hash.to_string();
+                {
+                    let map = self.torrents.lock().await;
+                    for existing in map.values() {
+                        let existing = existing.lock().await;
+                        if existing.info_hash == info_hash_str {
+                            return Response::Error(format!(
+                                "Torrent '{}' is already added (ID {})",
+                                existing.name, existing.id
+                            ));
+                        }
+                    }
+                }
+
                 let new_id = TorrentId(self.next_id.fetch_add(1, Ordering::SeqCst));
                 let torrent_state = Arc::new(Mutex::new(TorrentState {
                     id: new_id,
