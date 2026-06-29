@@ -91,8 +91,9 @@ jobs:
       - name: Package Artifacts
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/torrentd${{ matrix.bin_suffix }} dist/torrentd-${{ matrix.target }}${{ matrix.bin_suffix }}
-          cp target/${{ matrix.target }}/release/torrent${{ matrix.bin_suffix }} dist/torrent-${{ matrix.target }}${{ matrix.bin_suffix }}
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          cp target/${{ matrix.target }}/release/torrentd${{ matrix.bin_suffix }} dist/torrentd-${{ matrix.target }}-${TIMESTAMP}${{ matrix.bin_suffix }}
+          cp target/${{ matrix.target }}/release/torrent${{ matrix.bin_suffix }} dist/torrent-${{ matrix.target }}-${TIMESTAMP}${{ matrix.bin_suffix }}
         shell: bash
 
       - name: Upload Artifacts
