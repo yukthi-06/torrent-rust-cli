@@ -52,4 +52,3 @@ impl fmt::Display for TorrentId {
         write!(f, "{}", self.0)
     }
 }
-

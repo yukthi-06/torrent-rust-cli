@@ -5,7 +5,7 @@ use std::path::PathBuf;
 pub struct Config {
     pub download_dir: PathBuf,
     pub listen_port: u16,
-    pub max_upload: Option<usize>,   // in bytes/sec, None means unlimited
+    pub max_upload: Option<usize>, // in bytes/sec, None means unlimited
     pub max_download: Option<usize>, // in bytes/sec, None means unlimited
     pub max_connections: usize,
     pub enable_dht: bool,

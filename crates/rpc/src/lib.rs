@@ -57,7 +57,7 @@ pub enum Response {
     TorrentList(Vec<TorrentStatus>),
     TorrentStatus(TorrentStatus),
     Stats(SystemStats),
-    Info(String), // detailed multi-line info string or JSON
+    Info(String),   // detailed multi-line info string or JSON
     Config(String), // serialized config
     Version { version: String },
 }
