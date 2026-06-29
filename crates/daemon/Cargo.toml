@@ -1,0 +1,20 @@
+[package]
+name = "torrentd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+torrent-core = { path = "../core" }
+torrent-config = { path = "../config" }
+torrent-piece = { path = "../piece" }
+torrent-rpc = { path = "../rpc" }
+torrent-storage = { path = "../storage" }
+torrent-tracker = { path = "../tracker" }
+torrent-dht = { path = "../dht" }
+torrent-peer = { path = "../peer" }
+tokio.workspace = true
+serde.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true

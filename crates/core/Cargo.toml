@@ -1,0 +1,10 @@
+[package]
+name = "torrent-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde.workspace = true
+sha1.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true

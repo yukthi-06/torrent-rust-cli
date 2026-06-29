@@ -1,0 +1,13 @@
+[package]
+name = "torrent-storage"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+torrent-core = { path = "../core" }
+serde.workspace = true
+serde_json.workspace = true
+bincode.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tokio.workspace = true

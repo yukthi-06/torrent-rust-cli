@@ -1,0 +1,14 @@
+[package]
+name = "torrent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+torrent-core = { path = "../core" }
+torrent-config = { path = "../config" }
+torrent-rpc = { path = "../rpc" }
+tokio.workspace = true
+serde.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true

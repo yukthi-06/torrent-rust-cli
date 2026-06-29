@@ -1,0 +1,12 @@
+[package]
+name = "torrent-piece"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+torrent-core = { path = "../core" }
+bitvec.workspace = true
+sha1.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
