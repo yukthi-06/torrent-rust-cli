@@ -68,12 +68,29 @@ impl TorrentDownloader {
 
                 let mut peers = Vec::new();
                 for tracker_url in &trackers {
+                    let tracker = TrackerClient::new();
                     if tracker_url.starts_with("udp://") {
                         let host_port = tracker_url.trim_start_matches("udp://");
-                        info!("Trying tracker: {}", tracker_url);
-                        let tracker = TrackerClient::new();
+                        info!("Trying UDP tracker: {}", tracker_url);
                         match tracker
                             .announce_udp(host_port, self.meta.info_hash.0, self.peer_id, 6881)
+                            .await
+                        {
+                            Ok(p) => {
+                                if !p.is_empty() {
+                                    peers = p;
+                                    info!("Tracker {} returned {} peers", tracker_url, peers.len());
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                error!("Tracker announce failed for {}: {}", tracker_url, e);
+                            }
+                        }
+                    } else if tracker_url.starts_with("http://") {
+                        info!("Trying HTTP tracker: {}", tracker_url);
+                        match tracker
+                            .announce_http(tracker_url, self.meta.info_hash.0, self.peer_id, 6881)
                             .await
                         {
                             Ok(p) => {

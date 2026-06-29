@@ -1,6 +1,7 @@
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
-use tokio::net::UdpSocket;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpStream, UdpSocket};
 use tokio::time::timeout;
 
 #[derive(Default)]
@@ -119,7 +120,106 @@ impl TrackerClient {
 
         Ok(peers)
     }
+
+    /// Announces to an HTTP tracker and returns the list of discovered peer SocketAddrs.
+    pub async fn announce_http(
+        &self,
+        tracker_url: &str,
+        info_hash: [u8; 20],
+        peer_id: [u8; 20],
+        port: u16,
+    ) -> Result<Vec<SocketAddr>, anyhow::Error> {
+        // Strip prefix
+        let url_stripped = tracker_url.trim_start_matches("http://");
+        let (host_port, path) = match url_stripped.find('/') {
+            Some(idx) => (&url_stripped[..idx], &url_stripped[idx..]),
+            None => (url_stripped, "/announce"),
+        };
+
+        let host = match host_port.find(':') {
+            Some(idx) => &host_port[..idx],
+            None => host_port,
+        };
+        let port_val = match host_port.find(':') {
+            Some(idx) => host_port[idx + 1..].parse::<u16>()?,
+            None => 80,
+        };
+
+        // Resolve host
+        let addrs: Vec<SocketAddr> = format!("{}:{}", host, port_val)
+            .to_socket_addrs()?
+            .collect();
+        if addrs.is_empty() {
+            anyhow::bail!("Could not resolve host: {}", host);
+        }
+        let addr = addrs[0];
+
+        // Hex encode info_hash and peer_id
+        let mut info_hash_encoded = String::new();
+        for &b in &info_hash {
+            info_hash_encoded.push('%');
+            info_hash_encoded.push_str(&format!("{:02x}", b));
+        }
+        let mut peer_id_encoded = String::new();
+        for &b in &peer_id {
+            peer_id_encoded.push('%');
+            peer_id_encoded.push_str(&format!("{:02x}", b));
+        }
+
+        // Connect
+        let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(addr)).await??;
+
+        // Construct request
+        let req_str = format!(
+            "GET {}?info_hash={}&peer_id={}&port={}&downloaded=0&uploaded=0&left=0&compact=1 HTTP/1.1\r\n\
+             Host: {}\r\n\
+             Connection: close\r\n\r\n",
+            path, info_hash_encoded, peer_id_encoded, port, host_port
+        );
+
+        stream.write_all(req_str.as_bytes()).await?;
+
+        // Read response
+        let mut response = Vec::new();
+        timeout(Duration::from_secs(5), stream.read_to_end(&mut response)).await??;
+
+        // Find HTTP body
+        let body_start = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|pos| pos + 4)
+            .ok_or_else(|| anyhow::anyhow!("Invalid HTTP response from tracker"))?;
+
+        let body = &response[body_start..];
+
+        // Parse Bencode response
+        use torrent_core::bencode::Bencode;
+        let decoded = Bencode::decode(body)?;
+        let dict = match decoded {
+            Bencode::Dict(d) => d,
+            _ => anyhow::bail!("Expected dictionary response"),
+        };
+
+        if let Some(Bencode::ByteString(reason)) = dict.get(b"failure reason".as_ref()) {
+            anyhow::bail!(
+                "Tracker announcement failed: {}",
+                String::from_utf8_lossy(reason)
+            );
+        }
+
+        let mut peers = Vec::new();
+        if let Some(Bencode::ByteString(peers_bytes)) = dict.get(b"peers".as_ref()) {
+            for chunk in peers_bytes.chunks_exact(6) {
+                let ip = std::net::Ipv4Addr::new(chunk[0], chunk[1], chunk[2], chunk[3]);
+                let port = u16::from_be_bytes([chunk[4], chunk[5]]);
+                peers.push(SocketAddr::new(std::net::IpAddr::V4(ip), port));
+            }
+        }
+
+        Ok(peers)
+    }
 }
+
 
 fn rand_u32() -> u32 {
     let mut bytes = [0u8; 4];
