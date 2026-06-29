@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use torrent_core::meta::{FileMode, TorrentMeta};
 use torrent_core::TorrentId;
@@ -10,7 +10,6 @@ use torrent_rpc::{
     Request, Response, SystemStats, TorrentStatus,
 };
 use tracing::{error, info, warn};
-
 
 pub struct TorrentState {
     pub id: TorrentId,
@@ -32,7 +31,6 @@ impl RpcServer {
             next_id: AtomicU32::new(1),
         }
     }
-
 
     pub async fn run(
         self: Arc<Self>,
@@ -150,9 +148,16 @@ impl RpcServer {
                 let meta = match std::fs::read(path) {
                     Ok(bytes) => match TorrentMeta::from_bytes(&bytes) {
                         Ok(m) => m,
-                        Err(e) => return Response::Error(format!("Failed to parse torrent metainfo: {}", e)),
+                        Err(e) => {
+                            return Response::Error(format!(
+                                "Failed to parse torrent metainfo: {}",
+                                e
+                            ))
+                        }
                     },
-                    Err(e) => return Response::Error(format!("Failed to read torrent file: {}", e)),
+                    Err(e) => {
+                        return Response::Error(format!("Failed to read torrent file: {}", e))
+                    }
                 };
 
                 // Compute total size
