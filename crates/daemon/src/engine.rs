@@ -1,5 +1,6 @@
+use sha1::{Digest, Sha1};
 use std::fs::{File, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,7 +13,7 @@ use torrent_core::meta::{FileMode, TorrentMeta};
 use torrent_core::TorrentId;
 use torrent_peer::protocol::{Handshake, PeerMessage};
 use torrent_tracker::TrackerClient;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub struct TorrentDownloader {
     pub id: TorrentId,
@@ -52,7 +53,70 @@ impl TorrentDownloader {
                 return;
             }
 
-            // 2. Announce loop
+            // 2. Verify existing pieces on disk and resume from correct position
+            let completed_pieces = self.verify_pieces();
+            let total_pieces = self.meta.info.pieces.len() as u32;
+            let first_missing = completed_pieces
+                .iter()
+                .position(|&done| !done)
+                .map(|i| i as u32)
+                .unwrap_or(total_pieces);
+
+            let verified_downloaded = completed_pieces.iter().enumerate().fold(
+                0u64,
+                |acc, (i, &done)| {
+                    if done {
+                        let piece_len = if i as u32 == total_pieces - 1 {
+                            // Last piece may be shorter
+                            let total_size = {
+                                match &self.meta.info.mode {
+                                    FileMode::Single { length } => *length,
+                                    FileMode::Multi { files } => {
+                                        files.iter().map(|f| f.length).sum()
+                                    }
+                                }
+                            };
+                            let full_pieces_size =
+                                (total_pieces as u64 - 1) * self.meta.info.piece_length;
+                            total_size - full_pieces_size
+                        } else {
+                            self.meta.info.piece_length
+                        };
+                        acc + piece_len
+                    } else {
+                        acc
+                    }
+                },
+            );
+
+            {
+                let mut lock = self.state.lock().await;
+                let total_size = lock.size;
+                lock.downloaded = verified_downloaded.min(total_size);
+                lock.status = if first_missing >= total_pieces {
+                    "Completed".to_string()
+                } else {
+                    "Downloading".to_string()
+                };
+            }
+
+            if first_missing >= total_pieces {
+                info!(
+                    "Torrent {} already complete, skipping download",
+                    self.meta.info.name
+                );
+                return;
+            }
+
+            info!(
+                "Torrent {}: {}/{} pieces verified, resuming from piece {}",
+                self.meta.info.name,
+                completed_pieces.iter().filter(|&&d| d).count(),
+                total_pieces,
+                first_missing
+            );
+
+            // 3. Announce loop
             loop {
                 let mut trackers = Vec::new();
                 trackers.push(self.meta.announce.clone());
@@ -147,7 +211,7 @@ impl TorrentDownloader {
                 for peer in peers {
                     let self_clone = Arc::clone(&self);
                     tokio::spawn(async move {
-                        if let Err(e) = self_clone.handle_peer(peer).await {
+                        if let Err(e) = self_clone.handle_peer(peer, first_missing).await {
                             // Peer disconnected
                             tracing::debug!("Peer connection to {} ended: {}", peer, e);
                         }
@@ -158,6 +222,115 @@ impl TorrentDownloader {
                 sleep(Duration::from_secs(60)).await;
             }
         });
+    }
+
+    /// Reads each piece from disk and SHA1-hashes it against the expected piece hash.
+    /// Returns a Vec<bool> where true means the piece is complete and verified.
+    fn verify_pieces(&self) -> Vec<bool> {
+        let total_pieces = self.meta.info.pieces.len();
+        let piece_length = self.meta.info.piece_length as usize;
+        let total_size: u64 = match &self.meta.info.mode {
+            FileMode::Single { length } => *length,
+            FileMode::Multi { files } => files.iter().map(|f| f.length).sum(),
+        };
+
+        let mut completed = vec![false; total_pieces];
+
+        for piece_idx in 0..total_pieces {
+            let expected_hash = &self.meta.info.pieces[piece_idx];
+
+            // Calculate actual byte range for this piece
+            let piece_start = piece_idx as u64 * self.meta.info.piece_length;
+            let piece_end = (piece_start + self.meta.info.piece_length).min(total_size);
+            if piece_start >= total_size {
+                break;
+            }
+            let actual_len = (piece_end - piece_start) as usize;
+
+            // Read piece bytes from disk
+            let piece_data = match self.read_piece_from_disk(piece_start, actual_len) {
+                Ok(d) => d,
+                Err(e) => {
+                    warn!(
+                        "Piece {}: failed to read from disk: {}",
+                        piece_idx, e
+                    );
+                    continue;
+                }
+            };
+
+            // Verify it is not all zeros (sparse/empty file)
+            if piece_data.iter().all(|&b| b == 0) && piece_length > 0 {
+                continue;
+            }
+
+            // SHA1 hash check
+            let mut hasher = Sha1::new();
+            hasher.update(&piece_data);
+            let hash: [u8; 20] = hasher.finalize().into();
+            if &hash == expected_hash {
+                completed[piece_idx] = true;
+            }
+        }
+
+        completed
+    }
+
+    /// Reads `len` bytes starting at absolute byte offset `offset` across the torrent's files.
+    fn read_piece_from_disk(&self, offset: u64, len: usize) -> std::io::Result<Vec<u8>> {
+        let mut buf = vec![0u8; len];
+        let mut buf_pos = 0;
+
+        match &self.meta.info.mode {
+            FileMode::Single { .. } => {
+                let file_path = self.download_dir.join(&self.meta.info.name);
+                let mut file = File::open(&file_path)?;
+                file.seek(SeekFrom::Start(offset))?;
+                file.read_exact(&mut buf)?;
+            }
+            FileMode::Multi { files } => {
+                let parent_dir = self.download_dir.join(&self.meta.info.name);
+                let mut current_file_start = 0u64;
+                let mut remaining_offset = offset;
+
+                for f in files {
+                    let file_end = current_file_start + f.length;
+
+                    if remaining_offset >= f.length {
+                        remaining_offset -= f.length;
+                        current_file_start = file_end;
+                        continue;
+                    }
+
+                    // This file contributes to the piece
+                    let mut full_path = parent_dir.clone();
+                    for part in &f.path {
+                        full_path.push(part);
+                    }
+
+                    if !full_path.exists() {
+                        current_file_start = file_end;
+                        continue;
+                    }
+
+                    let mut file = File::open(&full_path)?;
+                    file.seek(SeekFrom::Start(remaining_offset))?;
+
+                    let available = f.length - remaining_offset;
+                    let to_read = (len - buf_pos).min(available as usize);
+                    file.read_exact(&mut buf[buf_pos..buf_pos + to_read])?;
+                    buf_pos += to_read;
+                    remaining_offset = 0;
+                    current_file_start = file_end;
+
+                    if buf_pos >= len {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(buf)
     }
 
     fn initialize_files(&self) -> std::io::Result<()> {
@@ -194,7 +367,11 @@ impl TorrentDownloader {
         Ok(())
     }
 
-    async fn handle_peer(&self, addr: SocketAddr) -> Result<(), anyhow::Error> {
+    async fn handle_peer(
+        &self,
+        addr: SocketAddr,
+        start_piece_index: u32,
+    ) -> Result<(), anyhow::Error> {
         let mut stream = TcpStream::connect(addr).await?;
 
         // Handshake
@@ -212,7 +389,7 @@ impl TorrentDownloader {
             .await?;
         stream.write_all(&PeerMessage::Unchoke.serialize()).await?;
 
-        let mut piece_index = 0;
+        let mut piece_index = start_piece_index;
         let mut block_offset = 0;
         let piece_length = self.meta.info.piece_length as u32;
         let total_pieces = self.meta.info.pieces.len() as u32;
