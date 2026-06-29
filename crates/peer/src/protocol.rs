@@ -1,4 +1,4 @@
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 pub const HANDSHAKE_PREFIX: &[u8] = b"\x13BitTorrent protocol";
 

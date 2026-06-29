@@ -1,3 +1,4 @@
+mod engine;
 mod server;
 
 use server::RpcServer;
