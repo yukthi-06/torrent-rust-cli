@@ -220,7 +220,6 @@ impl TrackerClient {
     }
 }
 
-
 fn rand_u32() -> u32 {
     let mut bytes = [0u8; 4];
     // Simple mock random using system time if rand is not in workspace
