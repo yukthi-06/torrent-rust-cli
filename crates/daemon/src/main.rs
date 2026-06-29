@@ -21,6 +21,9 @@ async fn main() -> anyhow::Result<()> {
     let server = Arc::new(RpcServer::new());
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
+    // Reload torrents saved from previous session
+    Arc::clone(&server).restore_state().await;
+
     let server_handle = tokio::spawn(async move {
         if let Err(e) = server.run(shutdown_rx).await {
             tracing::error!("RPC Server error: {:?}", e);

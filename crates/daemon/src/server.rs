@@ -1,5 +1,6 @@
 use crate::engine;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -12,6 +13,33 @@ use torrent_rpc::{
 };
 use tracing::{error, info, warn};
 
+/// Path to the persistent state file that records added torrents.
+fn state_file_path() -> PathBuf {
+    PathBuf::from("torrents.json")
+}
+
+/// Loads saved torrent file paths from disk.
+fn load_state() -> Vec<(u32, String)> {
+    let path = state_file_path();
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Persists the current list of torrent (id, path) pairs to disk.
+fn save_state(entries: &[(u32, String)]) {
+    let path = state_file_path();
+    match serde_json::to_string_pretty(entries) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                error!("Failed to save torrent state: {}", e);
+            }
+        }
+        Err(e) => error!("Failed to serialize torrent state: {}", e),
+    }
+}
+
 pub struct TorrentState {
     pub id: TorrentId,
     pub name: String,
@@ -23,6 +51,8 @@ pub struct TorrentState {
 
 pub struct RpcServer {
     torrents: Mutex<HashMap<TorrentId, Arc<Mutex<TorrentState>>>>,
+    /// Tracks (id, torrent_file_path) for persistence
+    saved_paths: Mutex<HashMap<u32, String>>,
     next_id: AtomicU32,
 }
 
@@ -30,8 +60,83 @@ impl RpcServer {
     pub fn new() -> Self {
         Self {
             torrents: Mutex::new(HashMap::new()),
+            saved_paths: Mutex::new(HashMap::new()),
             next_id: AtomicU32::new(1),
         }
+    }
+
+    /// Loads previously saved torrents from disk and starts their downloaders.
+    pub async fn restore_state(self: Arc<Self>) {
+        let entries = load_state();
+        if entries.is_empty() {
+            return;
+        }
+        info!("Restoring {} torrent(s) from saved state...", entries.len());
+        let mut max_id = 0u32;
+        for (id, path) in &entries {
+            max_id = max_id.max(*id);
+            let server = Arc::clone(&self);
+            let path = path.clone();
+            let id = *id;
+            tokio::spawn(async move {
+                server.restore_torrent(id, &path).await;
+            });
+        }
+        // Advance next_id past all restored IDs so new torrents get unique IDs
+        let current = self.next_id.load(Ordering::SeqCst);
+        if max_id + 1 > current {
+            self.next_id.store(max_id + 1, Ordering::SeqCst);
+        }
+        let mut saved = self.saved_paths.lock().await;
+        for (id, path) in entries {
+            saved.insert(id, path);
+        }
+    }
+
+    async fn restore_torrent(&self, id: u32, path: &str) {
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                error!("Restore: failed to read {}: {}", path, e);
+                return;
+            }
+        };
+        let meta = match TorrentMeta::from_bytes(&bytes) {
+            Ok(m) => m,
+            Err(e) => {
+                error!("Restore: failed to parse {}: {}", path, e);
+                return;
+            }
+        };
+        let size = match &meta.info.mode {
+            FileMode::Single { length } => *length,
+            FileMode::Multi { files } => files.iter().map(|f| f.length).sum(),
+        };
+        let torrent_id = TorrentId(id);
+        let torrent_state = Arc::new(Mutex::new(TorrentState {
+            id: torrent_id,
+            name: meta.info.name.clone(),
+            info_hash: meta.info_hash.to_string(),
+            size,
+            downloaded: 0,
+            status: "Downloading".to_string(),
+        }));
+        {
+            let mut map = self.torrents.lock().await;
+            map.insert(torrent_id, Arc::clone(&torrent_state));
+        }
+        let download_dir = PathBuf::from("downloads");
+        let mut peer_id = [0u8; 20];
+        peer_id[0..8].copy_from_slice(b"-AG0001-");
+        let downloader = Arc::new(engine::TorrentDownloader::new(
+            torrent_id,
+            meta,
+            download_dir,
+            peer_id,
+            torrent_state,
+        ));
+        info!("Resumed torrent ID {} from {}", id, path);
+        downloader.start().await;
     }
 
     pub async fn run(
@@ -183,8 +288,17 @@ impl RpcServer {
                     map.insert(new_id, Arc::clone(&torrent_state));
                 }
 
+                // Persist the torrent file path so it survives restarts
+                {
+                    let mut saved = self.saved_paths.lock().await;
+                    saved.insert(new_id.0, path_or_magnet.clone());
+                    let entries: Vec<(u32, String)> =
+                        saved.iter().map(|(k, v)| (*k, v.clone())).collect();
+                    save_state(&entries);
+                }
+
                 // Spawn downloader worker
-                let download_dir = std::path::PathBuf::from("downloads");
+                let download_dir = PathBuf::from("downloads");
                 let mut peer_id = [0u8; 20];
                 peer_id[0..8].copy_from_slice(b"-AG0001-"); // Client prefix
 
@@ -263,6 +377,12 @@ impl RpcServer {
             Request::Remove { id, delete_data: _ } => {
                 let mut map = self.torrents.lock().await;
                 if map.remove(&id).is_some() {
+                    // Remove from persisted state
+                    let mut saved = self.saved_paths.lock().await;
+                    saved.remove(&id.0);
+                    let entries: Vec<(u32, String)> =
+                        saved.iter().map(|(k, v)| (*k, v.clone())).collect();
+                    save_state(&entries);
                     Response::TorrentRemoved
                 } else {
                     Response::Error(format!("Torrent ID {} not found", id))
