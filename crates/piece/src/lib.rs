@@ -1,6 +1,5 @@
 use bitvec::prelude::*;
 use sha1::{Digest, Sha1};
-use std::collections::HashMap;
 
 pub type PieceIndex = u32;
 pub type BlockIndex = u32;

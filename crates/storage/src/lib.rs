@@ -1,3 +1,4 @@
+#[derive(Default)]
 pub struct StorageManager {
     // We will implement file-based persistent storage here
 }
