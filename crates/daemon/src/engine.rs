@@ -120,12 +120,7 @@ impl TorrentDownloader {
                     } else if tracker_url.starts_with("http://") {
                         info!("Trying HTTP tracker: {}", tracker_url);
                         match tracker
-                            .announce_http(
-                                tracker_url,
-                                self.meta.info_hash.0,
-                                self.peer_id,
-                                6881,
-                            )
+                            .announce_http(tracker_url, self.meta.info_hash.0, self.peer_id, 6881)
                             .await
                         {
                             Ok(p) => {
