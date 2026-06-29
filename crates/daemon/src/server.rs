@@ -390,6 +390,7 @@ impl RpcServer {
                         peers_connected: 0,
                     });
                 }
+                list.sort_by_key(|t| t.id.0);
                 Response::TorrentList(list)
             }
             Request::Status { id } => {
