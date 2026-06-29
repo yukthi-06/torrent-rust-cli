@@ -61,9 +61,10 @@ impl TorrentMeta {
         let announce_list = get_announce_list(&dict);
 
         // Extract info dictionary representation
-        let info_val = dict.get(b"info".as_ref())
+        let info_val = dict
+            .get(b"info".as_ref())
             .ok_or_else(|| MetaError::MissingField("info".to_string()))?;
-        
+
         let info_dict = match info_val {
             Bencode::Dict(d) => d,
             _ => return Err(MetaError::InvalidType("info".to_string())),
@@ -101,8 +102,10 @@ impl TorrentMeta {
                     _ => return Err(MetaError::InvalidType("file item".to_string())),
                 };
                 let length = get_int(file_dict, b"length")? as u64;
-                let path_val = file_dict.get(b"path".as_ref())
+                let path_val = file_dict
+                    .get(b"path".as_ref())
                     .ok_or_else(|| MetaError::MissingField("path".to_string()))?;
+
                 let path_list = match path_val {
                     Bencode::List(l) => l,
                     _ => return Err(MetaError::InvalidType("path".to_string())),
@@ -123,8 +126,7 @@ impl TorrentMeta {
         };
 
         // Calculate exact info dictionary hash
-        let info_slice = bencode::find_info_dict_slice(bytes)
-            .ok_or(MetaError::MissingInfoSlice)?;
+        let info_slice = bencode::find_info_dict_slice(bytes).ok_or(MetaError::MissingInfoSlice)?;
         let mut hasher = Sha1::new();
         hasher.update(info_slice);
         let info_hash = InfoHash(hasher.finalize().into());
@@ -150,22 +152,29 @@ fn get_string(dict: &BTreeMap<Vec<u8>, Bencode>, key: &[u8]) -> Result<String, M
 }
 
 fn get_bytes<'a>(dict: &'a BTreeMap<Vec<u8>, Bencode>, key: &[u8]) -> Result<&'a [u8], MetaError> {
-    let val = dict.get(key)
+    let val = dict
+        .get(key)
         .ok_or_else(|| MetaError::MissingField(String::from_utf8_lossy(key).into_owned()))?;
     match val {
         Bencode::ByteString(ref s) => Ok(s),
-        _ => Err(MetaError::InvalidType(String::from_utf8_lossy(key).into_owned())),
+        _ => Err(MetaError::InvalidType(
+            String::from_utf8_lossy(key).into_owned(),
+        )),
     }
 }
 
 fn get_int(dict: &BTreeMap<Vec<u8>, Bencode>, key: &[u8]) -> Result<i64, MetaError> {
-    let val = dict.get(key)
+    let val = dict
+        .get(key)
         .ok_or_else(|| MetaError::MissingField(String::from_utf8_lossy(key).into_owned()))?;
     match val {
         Bencode::Int(i) => Ok(*i),
-        _ => Err(MetaError::InvalidType(String::from_utf8_lossy(key).into_owned())),
+        _ => Err(MetaError::InvalidType(
+            String::from_utf8_lossy(key).into_owned(),
+        )),
     }
 }
+
 
 fn get_announce_list(dict: &BTreeMap<Vec<u8>, Bencode>) -> Option<Vec<Vec<String>>> {
     let val = dict.get(b"announce-list".as_ref())?;
@@ -213,7 +222,7 @@ mod tests {
         //   e
         // e
         let data = b"d8:announce43:http://torrent.ubuntu.com:6969/announce4:infod6:lengthi42e4:name10:ubuntu.iso12:piece lengthi16384e6:pieces20:abcdefghijklmnopqrstee";
-        
+
         let meta = TorrentMeta::from_bytes(data).unwrap();
         assert_eq!(meta.announce, "http://torrent.ubuntu.com:6969/announce");
         assert_eq!(meta.info.name, "ubuntu.iso");
@@ -231,4 +240,3 @@ mod tests {
         assert_eq!(meta.info_hash.0.len(), 20);
     }
 }
-

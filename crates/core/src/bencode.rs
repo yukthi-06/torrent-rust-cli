@@ -71,10 +71,13 @@ impl Bencode {
                 }
                 if *offset >= bytes.len() {
                     return Err(BencodeError::UnexpectedEOF);
-        }
+                }
                 let int_str = str::from_utf8(&bytes[start..*offset])?;
-                let val = int_str.parse::<i64>().map_err(|_| BencodeError::InvalidInteger)?;
+                let val = int_str
+                    .parse::<i64>()
+                    .map_err(|_| BencodeError::InvalidInteger)?;
                 *offset += 1; // skip 'e'
+
                 Ok(Bencode::Int(val))
             }
             'l' => {
@@ -115,9 +118,11 @@ impl Bencode {
                     return Err(BencodeError::UnexpectedEOF);
                 }
                 let len_str = str::from_utf8(&bytes[start..*offset])?;
-                let len = len_str.parse::<usize>().map_err(|_| BencodeError::InvalidLength)?;
+                let len = len_str
+                    .parse::<usize>()
+                    .map_err(|_| BencodeError::InvalidLength)?;
                 *offset += 1; // skip ':'
-                
+
                 if *offset + len > bytes.len() {
                     return Err(BencodeError::UnexpectedEOF);
                 }
