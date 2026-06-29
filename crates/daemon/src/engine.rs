@@ -54,25 +54,41 @@ impl TorrentDownloader {
 
             // 2. Announce loop
             loop {
-                // Parse tracker URL.
-                // If it starts with udp://, announce to UDP tracker.
-                let peers = if self.meta.announce.starts_with("udp://") {
-                    let host_port = self.meta.announce.trim_start_matches("udp://");
-                    let tracker = TrackerClient::new();
-                    match tracker
-                        .announce_udp(host_port, self.meta.info_hash.0, self.peer_id, 6881)
-                        .await
-                    {
-                        Ok(p) => p,
-                        Err(e) => {
-                            error!("Tracker announce failed for torrent {}: {}", self.id, e);
-                            Vec::new()
+                let mut trackers = Vec::new();
+                trackers.push(self.meta.announce.clone());
+                if let Some(list) = &self.meta.announce_list {
+                    for tier in list {
+                        for url in tier {
+                            if !trackers.contains(url) {
+                                trackers.push(url.clone());
+                            }
                         }
                     }
-                } else {
-                    // HTTP trackers are currently mock/not implemented. Return empty.
-                    Vec::new()
-                };
+                }
+
+                let mut peers = Vec::new();
+                for tracker_url in &trackers {
+                    if tracker_url.starts_with("udp://") {
+                        let host_port = tracker_url.trim_start_matches("udp://");
+                        info!("Trying tracker: {}", tracker_url);
+                        let tracker = TrackerClient::new();
+                        match tracker
+                            .announce_udp(host_port, self.meta.info_hash.0, self.peer_id, 6881)
+                            .await
+                        {
+                            Ok(p) => {
+                                if !p.is_empty() {
+                                    peers = p;
+                                    info!("Tracker {} returned {} peers", tracker_url, peers.len());
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                error!("Tracker announce failed for {}: {}", tracker_url, e);
+                            }
+                        }
+                    }
+                }
 
                 info!(
                     "Discovered {} peers from tracker for torrent {}",
