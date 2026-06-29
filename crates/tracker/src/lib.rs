@@ -21,7 +21,12 @@ impl TrackerClient {
     ) -> Result<Vec<SocketAddr>, anyhow::Error> {
         // Parse the tracker address.
         // Format of tracker_addr_str: "tracker.coppersurfer.tk:6969"
-        let addrs: Vec<SocketAddr> = tracker_addr_str.to_socket_addrs()?.collect();
+        // Extract only the host:port portion, discarding any path (e.g. /announce)
+        let host_port = match tracker_addr_str.split('/').next() {
+            Some(hp) => hp,
+            None => tracker_addr_str,
+        };
+        let addrs: Vec<SocketAddr> = host_port.to_socket_addrs()?.collect();
         if addrs.is_empty() {
             anyhow::bail!("Could not resolve tracker address: {}", tracker_addr_str);
         }
