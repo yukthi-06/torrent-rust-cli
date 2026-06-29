@@ -73,3 +73,56 @@ pub struct MessagePacket {
     pub version: u8,
     pub payload: Vec<u8>,
 }
+
+pub mod transport;
+
+use anyhow::Context;
+
+pub async fn send_request<S: transport::IpcStream>(
+    stream: &mut S,
+    req: &Request,
+) -> Result<(), anyhow::Error> {
+    let payload = bincode::serialize(req).context("Failed to serialize Request")?;
+    transport::write_packet(stream, PROTOCOL_VERSION, 0, &payload)
+        .await
+        .context("Failed to write request packet")?;
+    Ok(())
+}
+
+pub async fn receive_request<S: transport::IpcStream>(
+    stream: &mut S,
+) -> Result<Request, anyhow::Error> {
+    let (version, _cmd, payload) = transport::read_packet(stream)
+        .await
+        .context("Failed to read request packet")?;
+    if version != PROTOCOL_VERSION {
+        anyhow::bail!("Protocol version mismatch: expected {}, got {}", PROTOCOL_VERSION, version);
+    }
+    let req: Request = bincode::deserialize(&payload).context("Failed to deserialize Request")?;
+    Ok(req)
+}
+
+pub async fn send_response<S: transport::IpcStream>(
+    stream: &mut S,
+    resp: &Response,
+) -> Result<(), anyhow::Error> {
+    let payload = bincode::serialize(resp).context("Failed to serialize Response")?;
+    transport::write_packet(stream, PROTOCOL_VERSION, 1, &payload)
+        .await
+        .context("Failed to write response packet")?;
+    Ok(())
+}
+
+pub async fn receive_response<S: transport::IpcStream>(
+    stream: &mut S,
+) -> Result<Response, anyhow::Error> {
+    let (version, _cmd, payload) = transport::read_packet(stream)
+        .await
+        .context("Failed to read response packet")?;
+    if version != PROTOCOL_VERSION {
+        anyhow::bail!("Protocol version mismatch: expected {}, got {}", PROTOCOL_VERSION, version);
+    }
+    let resp: Response = bincode::deserialize(&payload).context("Failed to deserialize Response")?;
+    Ok(resp)
+}
+
