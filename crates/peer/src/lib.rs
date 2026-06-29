@@ -1,3 +1,5 @@
+pub mod protocol;
+
 #[derive(Default)]
 pub struct PeerSession;
 
@@ -6,3 +8,4 @@ impl PeerSession {
         Self
     }
 }
+

@@ -1,3 +1,5 @@
+pub mod engine;
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -20,7 +22,7 @@ pub struct TorrentState {
 }
 
 pub struct RpcServer {
-    torrents: Mutex<HashMap<TorrentId, TorrentState>>,
+    torrents: Mutex<HashMap<TorrentId, Arc<Mutex<TorrentState>>>>,
     next_id: AtomicU32,
 }
 
@@ -31,6 +33,7 @@ impl RpcServer {
             next_id: AtomicU32::new(1),
         }
     }
+
 
     pub async fn run(
         self: Arc<Self>,
@@ -167,25 +170,41 @@ impl RpcServer {
                 };
 
                 let new_id = TorrentId(self.next_id.fetch_add(1, Ordering::SeqCst));
-                let mut map = self.torrents.lock().await;
-                map.insert(
+                let torrent_state = Arc::new(Mutex::new(TorrentState {
+                    id: new_id,
+                    name: meta.info.name.clone(),
+                    info_hash: meta.info_hash.to_string(),
+                    size,
+                    status: "Downloading".to_string(),
+                }));
+
+                {
+                    let mut map = self.torrents.lock().await;
+                    map.insert(new_id, Arc::clone(&torrent_state));
+                }
+
+                // Spawn downloader worker
+                let download_dir = std::path::PathBuf::from("downloads");
+                let mut peer_id = [0u8; 20];
+                peer_id[0..8].copy_from_slice(b"-AG0001-"); // Client prefix
+
+                let downloader = Arc::new(engine::TorrentDownloader::new(
                     new_id,
-                    TorrentState {
-                        id: new_id,
-                        name: meta.info.name.clone(),
-                        info_hash: meta.info_hash.to_string(),
-                        size,
-                        status: "Stopped".to_string(),
-                    },
-                );
+                    meta,
+                    download_dir,
+                    peer_id,
+                    torrent_state,
+                ));
+                downloader.start().await;
 
                 Response::TorrentAdded { id: new_id }
             }
             Request::List => {
                 let map = self.torrents.lock().await;
-                let list = map
-                    .values()
-                    .map(|t| TorrentStatus {
+                let mut list = Vec::new();
+                for t_lock in map.values() {
+                    let t = t_lock.lock().await;
+                    list.push(TorrentStatus {
                         id: t.id,
                         name: t.name.clone(),
                         info_hash: t.info_hash.clone(),
@@ -197,8 +216,8 @@ impl RpcServer {
                         download_rate: 0,
                         upload_rate: 0,
                         peers_connected: 0,
-                    })
-                    .collect();
+                    });
+                }
                 Response::TorrentList(list)
             }
             Request::Status { id } => {
@@ -214,7 +233,8 @@ impl RpcServer {
                     }
                 };
 
-                if let Some(t) = map.get(&status_id) {
+                if let Some(t_lock) = map.get(&status_id) {
+                    let t = t_lock.lock().await;
                     Response::TorrentStatus(TorrentStatus {
                         id: t.id,
                         name: t.name.clone(),
@@ -241,8 +261,9 @@ impl RpcServer {
                 }
             }
             Request::Pause { id } => {
-                let mut map = self.torrents.lock().await;
-                if let Some(t) = map.get_mut(&id) {
+                let map = self.torrents.lock().await;
+                if let Some(t_lock) = map.get(&id) {
+                    let mut t = t_lock.lock().await;
                     t.status = "Paused".to_string();
                     Response::Ok
                 } else {
@@ -250,8 +271,9 @@ impl RpcServer {
                 }
             }
             Request::Resume { id } => {
-                let mut map = self.torrents.lock().await;
-                if let Some(t) = map.get_mut(&id) {
+                let map = self.torrents.lock().await;
+                if let Some(t_lock) = map.get(&id) {
+                    let mut t = t_lock.lock().await;
                     t.status = "Downloading".to_string();
                     Response::Ok
                 } else {
@@ -269,7 +291,8 @@ impl RpcServer {
             Request::Create { .. } => Response::Ok,
             Request::Info { id } => {
                 let map = self.torrents.lock().await;
-                if let Some(t) = map.get(&id) {
+                if let Some(t_lock) = map.get(&id) {
+                    let t = t_lock.lock().await;
                     Response::Info(format!(
                         "Name:      {}\nHash:      {}\nSize:      {:.1} MB\nStatus:    {}",
                         t.name,
