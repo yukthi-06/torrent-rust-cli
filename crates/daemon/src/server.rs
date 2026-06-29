@@ -162,7 +162,12 @@ impl RpcServer {
                                 let server = Arc::clone(&self);
                                 tokio::spawn(async move {
                                     if let Err(e) = server.handle_connection(ServerConnection::Unix(stream)).await {
-                                        warn!("Connection error: {:?}", e);
+                                        let msg = e.to_string();
+                                        if msg.contains("early eof") || msg.contains("connection reset") || msg.contains("Broken pipe") {
+                                            tracing::debug!("Client disconnected: {}", msg);
+                                        } else {
+                                            warn!("Connection error: {:?}", e);
+                                        }
                                     }
                                 });
                             }
@@ -201,7 +206,12 @@ impl RpcServer {
                                 let server = Arc::clone(&self);
                                 tokio::spawn(async move {
                                     if let Err(e) = server.handle_connection(ServerConnection::Windows(server_pipe)).await {
-                                        warn!("Connection error: {:?}", e);
+                                        let msg = e.to_string();
+                                        if msg.contains("early eof") || msg.contains("connection reset") || msg.contains("Broken pipe") || msg.contains("pipe") {
+                                            tracing::debug!("Client disconnected: {}", msg);
+                                        } else {
+                                            warn!("Connection error: {:?}", e);
+                                        }
                                     }
                                 });
                             }
@@ -226,11 +236,14 @@ impl RpcServer {
             let request = match receive_request(&mut connection).await {
                 Ok(req) => req,
                 Err(e) => {
-                    // Check if it's EOF (clean client disconnect)
-                    let err_str = e.to_string();
+                    // Check if it's a clean client disconnect (early EOF after response sent)
+                    let err_str = format!("{:?}", e);
                     if err_str.contains("early eof")
                         || err_str.contains("connection reset")
                         || err_str.contains("Broken pipe")
+                        || err_str.contains("Failed to read request packet")
+                        || err_str.contains("os error 109") // Windows: pipe broken
+                        || err_str.contains("os error 232") // Windows: pipe closed
                     {
                         break;
                     }
