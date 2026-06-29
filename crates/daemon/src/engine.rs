@@ -237,7 +237,7 @@ impl TorrentDownloader {
 
         let mut completed = vec![false; total_pieces];
 
-        for piece_idx in 0..total_pieces {
+        for (piece_idx, completed_flag) in completed.iter_mut().enumerate() {
             let expected_hash = &self.meta.info.pieces[piece_idx];
 
             // Calculate actual byte range for this piece
@@ -267,7 +267,7 @@ impl TorrentDownloader {
             hasher.update(&piece_data);
             let hash: [u8; 20] = hasher.finalize().into();
             if &hash == expected_hash {
-                completed[piece_idx] = true;
+                *completed_flag = true;
             }
         }
 
