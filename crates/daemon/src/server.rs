@@ -18,8 +18,8 @@ fn state_file_path() -> PathBuf {
     PathBuf::from("torrents.json")
 }
 
-/// Loads saved torrent file paths from disk.
-fn load_state() -> Vec<(u32, String)> {
+/// Loads saved torrent state from disk. Returns (id, path, downloaded_bytes).
+fn load_state() -> Vec<(u32, String, u64)> {
     let path = state_file_path();
     match std::fs::read_to_string(&path) {
         Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
@@ -27,8 +27,8 @@ fn load_state() -> Vec<(u32, String)> {
     }
 }
 
-/// Persists the current list of torrent (id, path) pairs to disk.
-fn save_state(entries: &[(u32, String)]) {
+/// Persists the current list of torrent (id, path, downloaded) tuples to disk.
+fn save_state(entries: &[(u32, String, u64)]) {
     let path = state_file_path();
     match serde_json::to_string_pretty(entries) {
         Ok(json) => {
@@ -73,13 +73,14 @@ impl RpcServer {
         }
         info!("Restoring {} torrent(s) from saved state...", entries.len());
         let mut max_id = 0u32;
-        for (id, path) in &entries {
+        for (id, path, downloaded) in &entries {
             max_id = max_id.max(*id);
             let server = Arc::clone(&self);
             let path = path.clone();
             let id = *id;
+            let downloaded = *downloaded;
             tokio::spawn(async move {
-                server.restore_torrent(id, &path).await;
+                server.restore_torrent(id, &path, downloaded).await;
             });
         }
         // Advance next_id past all restored IDs so new torrents get unique IDs
@@ -88,12 +89,12 @@ impl RpcServer {
             self.next_id.store(max_id + 1, Ordering::SeqCst);
         }
         let mut saved = self.saved_paths.lock().await;
-        for (id, path) in entries {
+        for (id, path, _downloaded) in entries {
             saved.insert(id, path);
         }
     }
 
-    async fn restore_torrent(&self, id: u32, path: &str) {
+    async fn restore_torrent(&self, id: u32, path: &str, downloaded: u64) {
         let bytes = match std::fs::read(path) {
             Ok(b) => b,
             Err(e) => {
@@ -113,13 +114,18 @@ impl RpcServer {
             FileMode::Multi { files } => files.iter().map(|f| f.length).sum(),
         };
         let torrent_id = TorrentId(id);
+        let status = if downloaded >= size && size > 0 {
+            "Completed".to_string()
+        } else {
+            "Downloading".to_string()
+        };
         let torrent_state = Arc::new(Mutex::new(TorrentState {
             id: torrent_id,
             name: meta.info.name.clone(),
             info_hash: meta.info_hash.to_string(),
             size,
-            downloaded: 0,
-            status: "Downloading".to_string(),
+            downloaded,
+            status,
         }));
         {
             let mut map = self.torrents.lock().await;
@@ -135,8 +141,24 @@ impl RpcServer {
             peer_id,
             torrent_state,
         ));
-        info!("Resumed torrent ID {} from {}", id, path);
+        info!("Resumed torrent ID {} ({} bytes already downloaded)", id, downloaded);
         downloader.start().await;
+    }
+
+    /// Flushes current download progress of all torrents to the state file.
+    pub async fn flush_progress(&self) {
+        let torrents = self.torrents.lock().await;
+        let saved = self.saved_paths.lock().await;
+        let mut entries: Vec<(u32, String, u64)> = Vec::new();
+        for (&id, state_lock) in torrents.iter() {
+            if let Some(path) = saved.get(&id.0) {
+                let state = state_lock.lock().await;
+                entries.push((id.0, path.clone(), state.downloaded));
+            }
+        }
+        if !entries.is_empty() {
+            save_state(&entries);
+        }
     }
 
     pub async fn run(
@@ -321,8 +343,10 @@ impl RpcServer {
                 {
                     let mut saved = self.saved_paths.lock().await;
                     saved.insert(new_id.0, path_or_magnet.clone());
-                    let entries: Vec<(u32, String)> =
-                        saved.iter().map(|(k, v)| (*k, v.clone())).collect();
+                    let entries: Vec<(u32, String, u64)> = saved
+                        .iter()
+                        .map(|(k, v)| (*k, v.clone(), 0u64))
+                        .collect();
                     save_state(&entries);
                 }
 
