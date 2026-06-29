@@ -356,7 +356,7 @@ impl RpcServer {
                         uploaded: 0,
                         status: t.status.clone(),
                         progress: if t.size > 0 {
-                            (t.downloaded as f32 / t.size as f32) * 100.0
+                            ((t.downloaded as f32 / t.size as f32) * 100.0).min(100.0)
                         } else {
                             0.0
                         },
@@ -391,7 +391,7 @@ impl RpcServer {
                         uploaded: 0,
                         status: t.status.clone(),
                         progress: if t.size > 0 {
-                            (t.downloaded as f32 / t.size as f32) * 100.0
+                            ((t.downloaded as f32 / t.size as f32) * 100.0).min(100.0)
                         } else {
                             0.0
                         },

@@ -246,7 +246,7 @@ impl TorrentDownloader {
                     let block_len = block.len() as u64;
                     {
                         let mut lock = self.state.lock().await;
-                        lock.downloaded += block_len;
+                        lock.downloaded = (lock.downloaded + block_len).min(lock.size);
                         if lock.downloaded >= lock.size {
                             lock.status = "Completed".to_string();
                         } else {
