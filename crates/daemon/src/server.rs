@@ -1,4 +1,8 @@
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use tokio::sync::Mutex;
+use torrent_core::meta::{FileMode, TorrentMeta};
 use torrent_core::TorrentId;
 use torrent_rpc::{
     receive_request, send_response,
@@ -7,14 +11,28 @@ use torrent_rpc::{
 };
 use tracing::{error, info, warn};
 
+
+pub struct TorrentState {
+    pub id: TorrentId,
+    pub name: String,
+    pub info_hash: String,
+    pub size: u64,
+    pub status: String,
+}
+
 pub struct RpcServer {
-    // We will later share actual torrent engine state here
+    torrents: Mutex<HashMap<TorrentId, TorrentState>>,
+    next_id: AtomicU32,
 }
 
 impl RpcServer {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            torrents: Mutex::new(HashMap::new()),
+            next_id: AtomicU32::new(1),
+        }
     }
+
 
     pub async fn run(
         self: Arc<Self>,
@@ -126,55 +144,149 @@ impl RpcServer {
             Request::Version => Response::Version {
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
-            Request::List => {
-                // Return dummy mock torrent list for this milestone
-                Response::TorrentList(vec![TorrentStatus {
-                    id: TorrentId(1),
-                    name: "ubuntu-24.04-desktop-amd64.iso".to_string(),
-                    info_hash: "d24b611e85ae6574f8cb4edca0f2b3e8114f62bf".to_string(),
-                    size: 4398301184,
-                    downloaded: 2199150592,
-                    uploaded: 12345678,
-                    status: "Downloading".to_string(),
-                    progress: 50.0,
-                    download_rate: 5120000,
-                    upload_rate: 250000,
-                    peers_connected: 42,
-                }])
+            Request::Add { path_or_magnet } => {
+                // Check if it's a .torrent file path
+                let path = std::path::Path::new(&path_or_magnet);
+                let meta = match std::fs::read(path) {
+                    Ok(bytes) => match TorrentMeta::from_bytes(&bytes) {
+                        Ok(m) => m,
+                        Err(e) => return Response::Error(format!("Failed to parse torrent metainfo: {}", e)),
+                    },
+                    Err(e) => return Response::Error(format!("Failed to read torrent file: {}", e)),
+                };
+
+                // Compute total size
+                let size = match &meta.info.mode {
+                    FileMode::Single { length } => *length,
+                    FileMode::Multi { files } => files.iter().map(|f| f.length).sum(),
+                };
+
+                let new_id = TorrentId(self.next_id.fetch_add(1, Ordering::SeqCst));
+                let mut map = self.torrents.lock().await;
+                map.insert(
+                    new_id,
+                    TorrentState {
+                        id: new_id,
+                        name: meta.info.name.clone(),
+                        info_hash: meta.info_hash.to_string(),
+                        size,
+                        status: "Stopped".to_string(),
+                    },
+                );
+
+                Response::TorrentAdded { id: new_id }
             }
-            Request::Add { .. } => Response::TorrentAdded { id: TorrentId(2) },
-            Request::Remove { .. } => Response::TorrentRemoved,
-            Request::Pause { .. } => Response::Ok,
-            Request::Resume { .. } => Response::Ok,
-            Request::Verify { .. } => Response::Ok,
-            Request::Create { .. } => Response::Ok,
-            Request::Info { id } => Response::Info(format!(
-                "Mock Info for Torrent ID {}:\n  Status: Active\n  Downloaded: 1.2 GB\n  Uploaded: 300 MB",
-                id
-            )),
+            Request::List => {
+                let map = self.torrents.lock().await;
+                let list = map
+                    .values()
+                    .map(|t| TorrentStatus {
+                        id: t.id,
+                        name: t.name.clone(),
+                        info_hash: t.info_hash.clone(),
+                        size: t.size,
+                        downloaded: 0,
+                        uploaded: 0,
+                        status: t.status.clone(),
+                        progress: 0.0,
+                        download_rate: 0,
+                        upload_rate: 0,
+                        peers_connected: 0,
+                    })
+                    .collect();
+                Response::TorrentList(list)
+            }
             Request::Status { id } => {
-                let status_id = id.unwrap_or(TorrentId(1));
-                Response::TorrentStatus(TorrentStatus {
-                    id: status_id,
-                    name: "ubuntu-24.04-desktop-amd64.iso".to_string(),
-                    info_hash: "d24b611e85ae6574f8cb4edca0f2b3e8114f62bf".to_string(),
-                    size: 4398301184,
-                    downloaded: 2199150592,
-                    uploaded: 12345678,
-                    status: "Downloading".to_string(),
-                    progress: 50.0,
-                    download_rate: 5120000,
-                    upload_rate: 250000,
-                    peers_connected: 42,
+                let map = self.torrents.lock().await;
+                let status_id = match id {
+                    Some(sid) => sid,
+                    None => {
+                        if let Some(&first_id) = map.keys().next() {
+                            first_id
+                        } else {
+                            return Response::Error("No torrents loaded".to_string());
+                        }
+                    }
+                };
+
+                if let Some(t) = map.get(&status_id) {
+                    Response::TorrentStatus(TorrentStatus {
+                        id: t.id,
+                        name: t.name.clone(),
+                        info_hash: t.info_hash.clone(),
+                        size: t.size,
+                        downloaded: 0,
+                        uploaded: 0,
+                        status: t.status.clone(),
+                        progress: 0.0,
+                        download_rate: 0,
+                        upload_rate: 0,
+                        peers_connected: 0,
+                    })
+                } else {
+                    Response::Error(format!("Torrent ID {} not found", status_id))
+                }
+            }
+            Request::Remove { id, delete_data: _ } => {
+                let mut map = self.torrents.lock().await;
+                if map.remove(&id).is_some() {
+                    Response::TorrentRemoved
+                } else {
+                    Response::Error(format!("Torrent ID {} not found", id))
+                }
+            }
+            Request::Pause { id } => {
+                let mut map = self.torrents.lock().await;
+                if let Some(t) = map.get_mut(&id) {
+                    t.status = "Paused".to_string();
+                    Response::Ok
+                } else {
+                    Response::Error(format!("Torrent ID {} not found", id))
+                }
+            }
+            Request::Resume { id } => {
+                let mut map = self.torrents.lock().await;
+                if let Some(t) = map.get_mut(&id) {
+                    t.status = "Downloading".to_string();
+                    Response::Ok
+                } else {
+                    Response::Error(format!("Torrent ID {} not found", id))
+                }
+            }
+            Request::Verify { id } => {
+                let map = self.torrents.lock().await;
+                if map.contains_key(&id) {
+                    Response::Ok
+                } else {
+                    Response::Error(format!("Torrent ID {} not found", id))
+                }
+            }
+            Request::Create { .. } => Response::Ok,
+            Request::Info { id } => {
+                let map = self.torrents.lock().await;
+                if let Some(t) = map.get(&id) {
+                    Response::Info(format!(
+                        "Name:      {}\nHash:      {}\nSize:      {:.1} MB\nStatus:    {}",
+                        t.name,
+                        t.info_hash,
+                        t.size as f32 / 1_048_576.0,
+                        t.status
+                    ))
+                } else {
+                    Response::Error(format!("Torrent ID {} not found", id))
+                }
+            }
+            Request::Stats => {
+                let map = self.torrents.lock().await;
+                let count = map.len();
+                Response::Stats(SystemStats {
+                    download_rate: 0,
+                    upload_rate: 0,
+                    total_downloaded: 0,
+                    total_uploaded: 0,
+                    num_torrents: count,
                 })
             }
-            Request::Stats => Response::Stats(SystemStats {
-                download_rate: 5120000,
-                upload_rate: 250000,
-                total_downloaded: 2199150592,
-                total_uploaded: 12345678,
-                num_torrents: 1,
-            }),
             Request::GetConfig => {
                 Response::Config("download_dir = \"downloads\"\nlisten_port = 6881\n".to_string())
             }
