@@ -17,6 +17,7 @@ pub struct TorrentState {
     pub name: String,
     pub info_hash: String,
     pub size: u64,
+    pub downloaded: u64,
     pub status: String,
 }
 
@@ -173,6 +174,7 @@ impl RpcServer {
                     name: meta.info.name.clone(),
                     info_hash: meta.info_hash.to_string(),
                     size,
+                    downloaded: 0,
                     status: "Downloading".to_string(),
                 }));
 
@@ -207,10 +209,14 @@ impl RpcServer {
                         name: t.name.clone(),
                         info_hash: t.info_hash.clone(),
                         size: t.size,
-                        downloaded: 0,
+                        downloaded: t.downloaded,
                         uploaded: 0,
                         status: t.status.clone(),
-                        progress: 0.0,
+                        progress: if t.size > 0 {
+                            (t.downloaded as f32 / t.size as f32) * 100.0
+                        } else {
+                            0.0
+                        },
                         download_rate: 0,
                         upload_rate: 0,
                         peers_connected: 0,
@@ -238,10 +244,14 @@ impl RpcServer {
                         name: t.name.clone(),
                         info_hash: t.info_hash.clone(),
                         size: t.size,
-                        downloaded: 0,
+                        downloaded: t.downloaded,
                         uploaded: 0,
                         status: t.status.clone(),
-                        progress: 0.0,
+                        progress: if t.size > 0 {
+                            (t.downloaded as f32 / t.size as f32) * 100.0
+                        } else {
+                            0.0
+                        },
                         download_rate: 0,
                         upload_rate: 0,
                         peers_connected: 0,

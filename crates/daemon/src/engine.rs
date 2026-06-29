@@ -149,6 +149,11 @@ impl TorrentDownloader {
             .await?;
         stream.write_all(&PeerMessage::Unchoke.serialize()).await?;
 
+        let mut piece_index = 0;
+        let mut block_offset = 0;
+        let piece_length = self.meta.info.piece_length as u32;
+        let total_pieces = self.meta.info.pieces.len() as u32;
+
         // Simple download loop from peer
         loop {
             let msg = PeerMessage::read(&mut stream).await?;
@@ -158,14 +163,14 @@ impl TorrentDownloader {
                     // Peer choked us. Currently we pause requests.
                 }
                 PeerMessage::Unchoke => {
-                    // Request blocks for piece 0 as a demo/first step
-                    // In a full implementation, we track needed blocks
-                    let req = PeerMessage::Request {
-                        index: 0,
-                        begin: 0,
-                        length: 16384,
-                    };
-                    stream.write_all(&req.serialize()).await?;
+                    if piece_index < total_pieces {
+                        let req = PeerMessage::Request {
+                            index: piece_index,
+                            begin: block_offset,
+                            length: 16384,
+                        };
+                        stream.write_all(&req.serialize()).await?;
+                    }
                 }
                 PeerMessage::Piece {
                     index,
@@ -175,9 +180,32 @@ impl TorrentDownloader {
                     // Write block to disk
                     self.write_block(index, begin, &block)?;
 
-                    // Update progress / downloaded bytes
-                    let mut lock = self.state.lock().await;
-                    lock.status = "Downloading".to_string();
+                    let block_len = block.len() as u64;
+                    {
+                        let mut lock = self.state.lock().await;
+                        lock.downloaded += block_len;
+                        if lock.downloaded >= lock.size {
+                            lock.status = "Completed".to_string();
+                        } else {
+                            lock.status = "Downloading".to_string();
+                        }
+                    }
+
+                    // Advance to next block
+                    block_offset += block.len() as u32;
+                    if block_offset >= piece_length {
+                        block_offset = 0;
+                        piece_index += 1;
+                    }
+
+                    if piece_index < total_pieces {
+                        let req = PeerMessage::Request {
+                            index: piece_index,
+                            begin: block_offset,
+                            length: 16384,
+                        };
+                        stream.write_all(&req.serialize()).await?;
+                    }
                 }
                 _ => {}
             }
