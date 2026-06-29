@@ -96,7 +96,11 @@ pub async fn receive_request<S: transport::IpcStream>(
         .await
         .context("Failed to read request packet")?;
     if version != PROTOCOL_VERSION {
-        anyhow::bail!("Protocol version mismatch: expected {}, got {}", PROTOCOL_VERSION, version);
+        anyhow::bail!(
+            "Protocol version mismatch: expected {}, got {}",
+            PROTOCOL_VERSION,
+            version
+        );
     }
     let req: Request = bincode::deserialize(&payload).context("Failed to deserialize Request")?;
     Ok(req)
@@ -120,9 +124,13 @@ pub async fn receive_response<S: transport::IpcStream>(
         .await
         .context("Failed to read response packet")?;
     if version != PROTOCOL_VERSION {
-        anyhow::bail!("Protocol version mismatch: expected {}, got {}", PROTOCOL_VERSION, version);
+        anyhow::bail!(
+            "Protocol version mismatch: expected {}, got {}",
+            PROTOCOL_VERSION,
+            version
+        );
     }
-    let resp: Response = bincode::deserialize(&payload).context("Failed to deserialize Response")?;
+    let resp: Response =
+        bincode::deserialize(&payload).context("Failed to deserialize Response")?;
     Ok(resp)
 }
-

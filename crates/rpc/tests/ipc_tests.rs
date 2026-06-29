@@ -1,8 +1,7 @@
 use torrent_rpc::{
-    Request, Response,
-    send_request, receive_request,
-    send_response, receive_response,
+    receive_request, receive_response, send_request, send_response,
     transport::{connect_daemon, get_ipc_path, ServerConnection},
+    Request, Response,
 };
 
 #[tokio::test]
@@ -17,19 +16,30 @@ async fn test_request_response_ipc() {
         let server_task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("Accept failed");
             let mut conn = ServerConnection::Unix(stream);
-            
-            let req = receive_request(&mut conn).await.expect("Server failed to receive request");
+
+            let req = receive_request(&mut conn)
+                .await
+                .expect("Server failed to receive request");
             assert!(matches!(req, Request::Version));
 
-            send_response(&mut conn, &Response::Version { version: "0.1.0".to_string() })
-                .await
-                .expect("Server failed to send response");
+            send_response(
+                &mut conn,
+                &Response::Version {
+                    version: "0.1.0".to_string(),
+                },
+            )
+            .await
+            .expect("Server failed to send response");
         });
 
         let mut client = connect_daemon().await.expect("Client failed to connect");
-        send_request(&mut client, &Request::Version).await.expect("Client failed to send request");
+        send_request(&mut client, &Request::Version)
+            .await
+            .expect("Client failed to send request");
 
-        let resp = receive_response(&mut client).await.expect("Client failed to receive response");
+        let resp = receive_response(&mut client)
+            .await
+            .expect("Client failed to receive response");
         if let Response::Version { version } = resp {
             assert_eq!(version, "0.1.0");
         } else {
@@ -43,28 +53,42 @@ async fn test_request_response_ipc() {
     #[cfg(windows)]
     {
         use tokio::net::windows::named_pipe::ServerOptions;
-        
+
         let server_pipe = ServerOptions::new()
             .first_pipe_instance(true)
             .create(path)
             .expect("Failed to create named pipe");
 
         let server_task = tokio::spawn(async move {
-            server_pipe.connect().await.expect("Named pipe connect failed");
+            server_pipe
+                .connect()
+                .await
+                .expect("Named pipe connect failed");
             let mut conn = ServerConnection::Windows(server_pipe);
 
-            let req = receive_request(&mut conn).await.expect("Server failed to receive request");
+            let req = receive_request(&mut conn)
+                .await
+                .expect("Server failed to receive request");
             assert!(matches!(req, Request::Version));
 
-            send_response(&mut conn, &Response::Version { version: "0.1.0".to_string() })
-                .await
-                .expect("Server failed to send response");
+            send_response(
+                &mut conn,
+                &Response::Version {
+                    version: "0.1.0".to_string(),
+                },
+            )
+            .await
+            .expect("Server failed to send response");
         });
 
         let mut client = connect_daemon().await.expect("Client failed to connect");
-        send_request(&mut client, &Request::Version).await.expect("Client failed to send request");
+        send_request(&mut client, &Request::Version)
+            .await
+            .expect("Client failed to send request");
 
-        let resp = receive_response(&mut client).await.expect("Client failed to receive response");
+        let resp = receive_response(&mut client)
+            .await
+            .expect("Client failed to receive response");
         if let Response::Version { version } = resp {
             assert_eq!(version, "0.1.0");
         } else {

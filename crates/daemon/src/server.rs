@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{error, info, warn};
+use torrent_core::TorrentId;
 use torrent_rpc::{
     receive_request, send_response,
     transport::{get_ipc_path, ServerConnection},
-    Request, Response, TorrentStatus, SystemStats,
+    Request, Response, SystemStats, TorrentStatus,
 };
-use torrent_core::TorrentId;
+use tracing::{error, info, warn};
 
 pub struct RpcServer {
     // We will later share actual torrent engine state here
@@ -17,8 +17,10 @@ impl RpcServer {
         Self {}
     }
 
-    /// Run the server loop.
-    pub async fn run(self: Arc<Self>, mut shutdown_rx: tokio::sync::watch::Receiver<bool>) -> anyhow::Result<()> {
+    pub async fn run(
+        self: Arc<Self>,
+        mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    ) -> anyhow::Result<()> {
         let path = get_ipc_path();
 
         #[cfg(unix)]
@@ -70,7 +72,6 @@ impl RpcServer {
                     .create(path)?;
                 is_first = false;
 
-
                 tokio::select! {
                     connect_res = server_pipe.connect() => {
                         match connect_res {
@@ -105,7 +106,10 @@ impl RpcServer {
                 Err(e) => {
                     // Check if it's EOF (clean client disconnect)
                     let err_str = e.to_string();
-                    if err_str.contains("early eof") || err_str.contains("connection reset") || err_str.contains("Broken pipe") {
+                    if err_str.contains("early eof")
+                        || err_str.contains("connection reset")
+                        || err_str.contains("Broken pipe")
+                    {
                         break;
                     }
                     return Err(e);
@@ -125,37 +129,35 @@ impl RpcServer {
             },
             Request::List => {
                 // Return dummy mock torrent list for this milestone
-                Response::TorrentList(vec![
-                    TorrentStatus {
-                        id: TorrentId(1),
-                        name: "ubuntu-24.04-desktop-amd64.iso".to_string(),
-                        info_hash: "d24b611e85ae6574f8cb4edca0f2b3e8114f62bf".to_string(),
-                        size: 4398301184,
-                        downloaded: 2199150592,
-                        uploaded: 12345678,
-                        status: "Downloading".to_string(),
-                        progress: 50.0,
-                        download_rate: 5120000,
-                        upload_rate: 250000,
-                        peers_connected: 42,
-                    }
-                ])
-            }
-            Request::Stats => {
-                Response::Stats(SystemStats {
+                Response::TorrentList(vec![TorrentStatus {
+                    id: TorrentId(1),
+                    name: "ubuntu-24.04-desktop-amd64.iso".to_string(),
+                    info_hash: "d24b611e85ae6574f8cb4edca0f2b3e8114f62bf".to_string(),
+                    size: 4398301184,
+                    downloaded: 2199150592,
+                    uploaded: 12345678,
+                    status: "Downloading".to_string(),
+                    progress: 50.0,
                     download_rate: 5120000,
                     upload_rate: 250000,
-                    total_downloaded: 2199150592,
-                    total_uploaded: 12345678,
-                    num_torrents: 1,
-                })
+                    peers_connected: 42,
+                }])
             }
+            Request::Stats => Response::Stats(SystemStats {
+                download_rate: 5120000,
+                upload_rate: 250000,
+                total_downloaded: 2199150592,
+                total_uploaded: 12345678,
+                num_torrents: 1,
+            }),
             Request::GetConfig => {
                 Response::Config("download_dir = \"downloads\"\nlisten_port = 6881\n".to_string())
             }
-            _ => {
-                Response::Error(format!("Command {:?} is not yet fully implemented in this milestone", request))
-            }
+            _ => Response::Error(format!(
+                "Command {:?} is not yet fully implemented in this milestone",
+                request
+            )),
+
         }
     }
 }

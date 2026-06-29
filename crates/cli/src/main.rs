@@ -1,9 +1,6 @@
 use clap::{Parser, Subcommand};
 use torrent_core::TorrentId;
-use torrent_rpc::{
-    connect_daemon, send_request, receive_response,
-    Request, Response,
-};
+use torrent_rpc::{connect_daemon, receive_response, send_request, Request, Response};
 
 #[derive(Parser)]
 #[command(name = "torrent")]
@@ -75,12 +72,19 @@ async fn main() -> anyhow::Result<()> {
     // Map CLI subcommand to RPC Request
     let request = match cli.command {
         Commands::Create { path } => Request::Create { path },
-        Commands::Add { torrent } => Request::Add { path_or_magnet: torrent },
-        Commands::Remove { id, delete_data } => Request::Remove { id: TorrentId(id), delete_data },
+        Commands::Add { torrent } => Request::Add {
+            path_or_magnet: torrent,
+        },
+        Commands::Remove { id, delete_data } => Request::Remove {
+            id: TorrentId(id),
+            delete_data,
+        },
         Commands::Pause { id } => Request::Pause { id: TorrentId(id) },
         Commands::Resume { id } => Request::Resume { id: TorrentId(id) },
         Commands::List => Request::List,
-        Commands::Status { id } => Request::Status { id: id.map(TorrentId) },
+        Commands::Status { id } => Request::Status {
+            id: id.map(TorrentId),
+        },
         Commands::Stats => Request::Stats,
         Commands::Info { id } => Request::Info { id: TorrentId(id) },
         Commands::Verify { id } => Request::Verify { id: TorrentId(id) },
@@ -120,12 +124,18 @@ async fn main() -> anyhow::Result<()> {
             if list.is_empty() {
                 println!("No torrents loaded.");
             } else {
-                println!("{:<4} {:<35} {:<10} {:<10} {:<12} {:<6}", "ID", "Name", "Size", "Progress", "Status", "Peers");
+                println!(
+                    "{:<4} {:<35} {:<10} {:<10} {:<12} {:<6}",
+                    "ID", "Name", "Size", "Progress", "Status", "Peers"
+                );
                 println!("{}", "-".repeat(80));
                 for t in list {
                     let progress_str = format!("{:.1}%", t.progress);
                     let size_mb = format!("{:.1} MB", t.size as f32 / 1_048_576.0);
-                    println!("{:<4} {:<35} {:<10} {:<10} {:<12} {:<6}", t.id, t.name, size_mb, progress_str, t.status, t.peers_connected);
+                    println!(
+                        "{:<4} {:<35} {:<10} {:<10} {:<12} {:<6}",
+                        t.id, t.name, size_mb, progress_str, t.status, t.peers_connected
+                    );
                 }
             }
         }
@@ -146,11 +156,24 @@ async fn main() -> anyhow::Result<()> {
         Response::Stats(stats) => {
             println!("System Status:");
             println!("  Total Torrents:  {}", stats.num_torrents);
-            println!("  Download Rate:   {:.1} KB/s", stats.download_rate as f32 / 1024.0);
-            println!("  Upload Rate:     {:.1} KB/s", stats.upload_rate as f32 / 1024.0);
-            println!("  Total Downloaded:{:.1} MB", stats.total_downloaded as f32 / 1_048_576.0);
-            println!("  Total Uploaded:  {:.1} MB", stats.total_uploaded as f32 / 1_048_576.0);
+            println!(
+                "  Download Rate:   {:.1} KB/s",
+                stats.download_rate as f32 / 1024.0
+            );
+            println!(
+                "  Upload Rate:     {:.1} KB/s",
+                stats.upload_rate as f32 / 1024.0
+            );
+            println!(
+                "  Total Downloaded:{:.1} MB",
+                stats.total_downloaded as f32 / 1_048_576.0
+            );
+            println!(
+                "  Total Uploaded:  {:.1} MB",
+                stats.total_uploaded as f32 / 1_048_576.0
+            );
         }
+
         Response::Info(info_str) => {
             println!("{}", info_str);
         }
@@ -165,4 +188,3 @@ async fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
-

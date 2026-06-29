@@ -1,7 +1,7 @@
 mod server;
 
-use std::sync::Arc;
 use server::RpcServer;
+use std::sync::Arc;
 use tracing::info;
 
 #[tokio::main]
@@ -28,4 +28,3 @@ async fn main() -> anyhow::Result<()> {
     info!("Daemon stopped cleanly.");
     Ok(())
 }
-

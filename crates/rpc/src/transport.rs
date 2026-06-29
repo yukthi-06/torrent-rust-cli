@@ -15,9 +15,7 @@ impl IpcStream for tokio::net::windows::named_pipe::NamedPipeServerStream {}
 
 /// Helper to read a packet from an IpcStream.
 /// Format: [Version: 1 byte] [Command: 4 bytes] [Length: 4 bytes] [Payload: Length bytes]
-pub async fn read_packet<S: IpcStream>(
-    stream: &mut S,
-) -> std::io::Result<(u8, u32, Vec<u8>)> {
+pub async fn read_packet<S: IpcStream>(stream: &mut S) -> std::io::Result<(u8, u32, Vec<u8>)> {
     let mut header = [0u8; 9];
     stream.read_exact(&mut header).await?;
 
