@@ -229,7 +229,7 @@ mod tests {
         let data = b"l4:spami42ee";
         let val = Bencode::decode(data).unwrap();
         match val {
-            Bencode::List(list) => {
+            Bencode::List(ref list) => {
                 assert_eq!(list.len(), 2);
                 assert_eq!(list[0], Bencode::ByteString(b"spam".to_vec()));
                 assert_eq!(list[1], Bencode::Int(42));
@@ -244,7 +244,7 @@ mod tests {
         let data = b"d3:bar4:spam3:fooi42ee";
         let val = Bencode::decode(data).unwrap();
         match val {
-            Bencode::Dict(dict) => {
+            Bencode::Dict(ref dict) => {
                 assert_eq!(dict.len(), 2);
                 assert_eq!(
                     dict.get(b"bar".as_ref()).unwrap(),
