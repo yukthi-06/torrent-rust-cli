@@ -100,12 +100,19 @@ impl TorrentDownloader {
                                     Ok(p) => {
                                         if !p.is_empty() {
                                             peers = p;
-                                            info!("HTTP fallback {} returned {} peers", http_fallback, peers.len());
+                                            info!(
+                                                "HTTP fallback {} returned {} peers",
+                                                http_fallback,
+                                                peers.len()
+                                            );
                                             break;
                                         }
                                     }
                                     Err(he) => {
-                                        error!("HTTP fallback failed for {}: {}", http_fallback, he);
+                                        error!(
+                                            "HTTP fallback failed for {}: {}",
+                                            http_fallback, he
+                                        );
                                     }
                                 }
                             }
@@ -113,7 +120,12 @@ impl TorrentDownloader {
                     } else if tracker_url.starts_with("http://") {
                         info!("Trying HTTP tracker: {}", tracker_url);
                         match tracker
-                            .announce_http(tracker_url, self.meta.info_hash.0, self.peer_id, 6881)
+                            .announce_http(
+                                tracker_url,
+                                self.meta.info_hash.0,
+                                self.peer_id,
+                                6881,
+                            )
                             .await
                         {
                             Ok(p) => {
