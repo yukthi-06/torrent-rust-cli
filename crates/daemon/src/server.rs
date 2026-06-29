@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use torrent_core::TorrentId;
 use torrent_rpc::{
     receive_request, send_response,

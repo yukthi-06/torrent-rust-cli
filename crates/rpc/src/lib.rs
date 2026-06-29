@@ -75,6 +75,7 @@ pub struct MessagePacket {
 }
 
 pub mod transport;
+pub use transport::connect_daemon;
 
 use anyhow::Context;
 
