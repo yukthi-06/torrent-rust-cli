@@ -7,7 +7,15 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    // Disable ANSI color codes when stdout is not a terminal (e.g. piped or run as a service)
+    let ansi_colors = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    tracing_subscriber::fmt()
+        .with_ansi(ansi_colors)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
     info!("Starting torrentd background daemon...");
 
     let server = Arc::new(RpcServer::new());
