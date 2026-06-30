@@ -233,7 +233,6 @@ impl RpcServer {
         let mut entries: Vec<(u32, String)> = Vec::new();
         for (&id, handle) in torrents.iter() {
             if let Some(path) = saved.get(&id.0) {
-                let state = handle.state.lock().await;
                 entries.push((id.0, path.clone()));
             }
         }
@@ -334,7 +333,7 @@ impl RpcServer {
         Ok(())
     }
 
-    async fn handle_connection(&self, mut connection: ServerConnection) -> anyhow::Result<()> {
+    async fn handle_connection(self: Arc<Self>, mut connection: ServerConnection) -> anyhow::Result<()> {
         loop {
             let request = match receive_request(&mut connection).await {
                 Ok(req) => req,
@@ -361,7 +360,7 @@ impl RpcServer {
         Ok(())
     }
 
-    async fn process_request(&self, request: Request) -> Response {
+    async fn process_request(self: &Arc<Self>, request: Request) -> Response {
         match request {
             Request::Version => Response::Version {
                 version: format!(
@@ -677,7 +676,7 @@ impl RpcServer {
                         drop(t);
                         drop(worker_lock);
                         drop(map);
-                        let server = Arc::clone(&self);
+                        let server = Arc::clone(self);
                         tokio::spawn(async move {
                             server.restore_torrent(id.0, &p).await;
                         });
@@ -706,7 +705,7 @@ impl RpcServer {
                     if let Some(p) = path {
                         drop(t);
                         drop(map);
-                        let server = Arc::clone(&self);
+                        let server = Arc::clone(self);
                         tokio::spawn(async move {
                             server.restore_torrent(id.0, &p).await;
                         });
@@ -721,8 +720,8 @@ impl RpcServer {
             Request::Create { .. } => Response::Ok,
             Request::Info { id } => {
                 let map = self.torrents.lock().await;
-                if let Some(t_lock) = map.get(&id) {
-                    let t = t_lock.lock().await;
+                if let Some(handle) = map.get(&id) {
+                    let t = handle.state.lock().await;
                     Response::Info(format!(
                         "Name:      {}\nHash:      {}\nSize:      {:.1} MB\nStatus:    {}",
                         t.name,
