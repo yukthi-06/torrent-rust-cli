@@ -99,8 +99,8 @@ impl MagnetWorker {
                 all_peers.len()
             );
 
-            // Try peers concurrently in batches of 5
-            for chunk in all_peers.chunks(5) {
+            // Try peers concurrently in batches of 50
+            for chunk in all_peers.chunks(50) {
                 let mut handles = Vec::new();
                 for &peer_addr in chunk {
                     let info_hash = self.magnet.info_hash;
