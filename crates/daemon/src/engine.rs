@@ -98,14 +98,14 @@ impl TorrentDownloader {
                 let mut lock = self.state.lock().await;
                 let total_size = lock.size;
                 lock.downloaded = verified_downloaded.min(total_size);
-                lock.status = if first_missing >= total_pieces {
+                lock.status = if missing_list.is_empty() {
                     "Completed".to_string()
                 } else {
                     "Downloading".to_string()
                 };
             }
 
-            if first_missing >= total_pieces {
+            if missing_list.is_empty() {
                 info!(
                     "Torrent {} already complete, skipping download",
                     self.meta.info.name
@@ -118,7 +118,7 @@ impl TorrentDownloader {
                 self.meta.info.name,
                 completed_pieces.iter().filter(|&&d| d).count(),
                 total_pieces,
-                first_missing
+                missing_list.first().unwrap_or(&total_pieces)
             );
 
             // 3. Announce loop
@@ -536,7 +536,7 @@ impl TorrentDownloader {
                             piece_guard.block_offset = 0;
                             piece_guard.is_complete = false;
                         } else {
-                            break;
+                            break Ok(());
                         }
                     }
 
