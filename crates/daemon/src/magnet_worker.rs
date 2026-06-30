@@ -224,6 +224,9 @@ impl MagnetWorker {
         };
         stream.write_all(&ext_msg.serialize()).await?;
 
+        // Send Interested message so peers are more likely to answer our requests
+        stream.write_all(&PeerMessage::Interested.serialize()).await?;
+
         // Wait for their extended handshake
         tracing::debug!("Peer {}: Waiting for their extended handshake", addr);
         let mut ut_metadata_id = None;
@@ -307,7 +310,7 @@ impl MagnetWorker {
             let mut got_piece = false;
             for _ in 0..30 {
                 let msg =
-                    timeout(Duration::from_secs(5), PeerMessage::read(&mut stream))
+                    timeout(Duration::from_secs(15), PeerMessage::read(&mut stream))
                         .await??;
                 if let PeerMessage::Extended { msg_id, payload } = msg {
                     if msg_id == ut_metadata_id {
