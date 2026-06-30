@@ -115,9 +115,15 @@ impl MagnetWorker {
                 while let Some(res) = set.join_next().await {
                     if let Ok((peer_addr, result)) = res {
                         match result {
-                            Ok(meta) => {
+                            Ok(mut meta) => {
                                 info!("Successfully fetched metadata from {}", peer_addr);
                                 set.abort_all(); // Kill all other metadata fetching threads instantly
+                                
+                                if !self.magnet.trackers.is_empty() {
+                                    meta.announce = self.magnet.trackers[0].clone();
+                                    meta.announce_list = Some(vec![self.magnet.trackers.clone()]);
+                                }
+                                
                                 return Ok(meta);
                             }
                             Err(e) => {
@@ -368,6 +374,7 @@ impl MagnetWorker {
         let info_dict = Bencode::decode(&metadata_bytes)?;
         let mut root = BTreeMap::new();
         root.insert(b"info".to_vec(), info_dict);
+        root.insert(b"announce".to_vec(), Bencode::String(b"".to_vec())); // Dummy announce so it parses
 
         let full_meta_bytes = Bencode::Dict(root).encode();
         let meta = torrent_core::meta::TorrentMeta::from_bytes(&full_meta_bytes)?;
