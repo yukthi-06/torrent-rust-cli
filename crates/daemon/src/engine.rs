@@ -476,7 +476,7 @@ impl TorrentDownloader {
                 let file_path = self.download_dir.join(&self.meta.info.name);
                 let mut file = OpenOptions::new().write(true).open(file_path)?;
                 file.seek(SeekFrom::Start(absolute_offset))?;
-                
+
                 let remaining = length.saturating_sub(absolute_offset);
                 let to_write = (data.len() as u64).min(remaining) as usize;
                 file.write_all(&data[..to_write])?;
