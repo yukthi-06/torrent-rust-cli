@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use torrent_core::meta::{FileMode, TorrentMeta};
 use torrent_core::TorrentId;
 use torrent_peer::protocol::{Handshake, PeerMessage};
@@ -439,7 +439,7 @@ impl TorrentDownloader {
 
         // Simple download loop from peer
         loop {
-            let msg = PeerMessage::read(&mut stream).await?;
+            let msg = PeerMessage::read(stream).await?;
             match msg {
                 PeerMessage::KeepAlive => {}
                 PeerMessage::Choke => {
