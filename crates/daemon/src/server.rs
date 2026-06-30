@@ -332,7 +332,18 @@ impl RpcServer {
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
             Request::Add { path_or_magnet } => {
-                if path_or_magnet.starts_with("magnet:?") {
+                let mut path_or_magnet = path_or_magnet.trim().to_string();
+                
+                // If it's exactly 40 characters of hex, treat it as a bare info hash
+                if path_or_magnet.len() == 40 && path_or_magnet.chars().all(|c| c.is_ascii_hexdigit()) {
+                    // Convert it to a magnet URI and add a couple of reliable public trackers so we can find peers
+                    path_or_magnet = format!(
+                        "magnet:?xt=urn:btih:{}&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A80%2Fannounce",
+                        path_or_magnet
+                    );
+                }
+
+                if path_or_magnet.to_lowercase().starts_with("magnet:?") {
                     let magnet = match torrent_core::magnet::MagnetLink::parse(&path_or_magnet) {
                         Ok(m) => m,
                         Err(e) => return Response::Error(format!("Invalid magnet link: {}", e)),
