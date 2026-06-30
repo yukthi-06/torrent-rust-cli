@@ -132,9 +132,19 @@ async fn main() -> anyhow::Result<()> {
                 for t in list {
                     let progress_str = format!("{:.1}%", t.progress);
                     let size_mb = format!("{:.1} MB", t.size as f32 / 1_048_576.0);
+                    
+                    // Truncate name if it's too long to preserve alignment
+                    let display_name = if t.name.chars().count() > 33 {
+                        let mut truncated: String = t.name.chars().take(30).collect();
+                        truncated.push_str("...");
+                        truncated
+                    } else {
+                        t.name.clone()
+                    };
+
                     println!(
                         "{:<4} {:<35} {:<10} {:<10} {:<12} {:<6}",
-                        t.id, t.name, size_mb, progress_str, t.status, t.peers_connected
+                        t.id, display_name, size_mb, progress_str, t.status, t.peers_connected
                     );
                 }
             }
