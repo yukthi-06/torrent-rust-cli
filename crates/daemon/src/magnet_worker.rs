@@ -204,7 +204,12 @@ impl MagnetWorker {
                 PeerMessage::Bitfield(_)
                 | PeerMessage::Have { .. }
                 | PeerMessage::Unchoke
-                | PeerMessage::KeepAlive => {
+                | PeerMessage::Choke
+                | PeerMessage::Interested
+                | PeerMessage::NotInterested
+                | PeerMessage::KeepAlive
+                | PeerMessage::Port(_)
+                | PeerMessage::Unknown { .. } => {
                     // Normal messages before extended handshake, skip them
                     continue;
                 }

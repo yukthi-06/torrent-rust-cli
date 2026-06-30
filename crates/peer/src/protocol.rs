@@ -86,6 +86,11 @@ pub enum PeerMessage {
         msg_id: u8,
         payload: Vec<u8>,
     },
+    Port(u16),
+    Unknown {
+        id: u8,
+        data: Vec<u8>,
+    },
 }
 
 impl PeerMessage {
@@ -163,6 +168,17 @@ impl PeerMessage {
                 buf.push(*msg_id);
                 buf.extend_from_slice(payload);
             }
+            PeerMessage::Port(port) => {
+                buf.extend_from_slice(&3u32.to_be_bytes());
+                buf.push(9);
+                buf.extend_from_slice(&port.to_be_bytes());
+            }
+            PeerMessage::Unknown { id, data } => {
+                let len = (1 + data.len()) as u32;
+                buf.extend_from_slice(&len.to_be_bytes());
+                buf.push(*id);
+                buf.extend_from_slice(data);
+            }
         }
         buf
     }
@@ -228,6 +244,11 @@ impl PeerMessage {
                     length: u32::from_be_bytes([buf[8], buf[9], buf[10], buf[11]]),
                 })
             }
+            9 => {
+                let mut buf = [0u8; 2];
+                reader.read_exact(&mut buf).await?;
+                Ok(PeerMessage::Port(u16::from_be_bytes(buf)))
+            }
             20 => {
                 if len < 2 {
                     return Err(std::io::Error::new(
@@ -244,10 +265,13 @@ impl PeerMessage {
                     payload,
                 })
             }
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Unknown message ID: {}", id),
-            )),
+            _ => {
+                // Consume remaining bytes for unknown message types
+                let remaining = len - 1;
+                let mut buf = vec![0u8; remaining];
+                reader.read_exact(&mut buf).await?;
+                Ok(PeerMessage::Unknown { id, data: buf })
+            }
         }
     }
 }
