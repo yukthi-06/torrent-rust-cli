@@ -392,6 +392,18 @@ impl TorrentDownloader {
         let piece_length = self.meta.info.piece_length as u32;
         let total_pieces = self.meta.info.pieces.len() as u32;
 
+        let total_size: u64 = match &self.meta.info.mode {
+            FileMode::Single { length } => *length,
+            FileMode::Multi { files } => files.iter().map(|f| f.length).sum(),
+        };
+
+        let get_request_length = |p_index: u32, b_offset: u32| -> u32 {
+            let piece_start = p_index as u64 * piece_length as u64;
+            let remaining_in_torrent = total_size.saturating_sub(piece_start + b_offset as u64);
+            let remaining_in_piece = (piece_length - b_offset) as u64;
+            16384.min(remaining_in_torrent).min(remaining_in_piece) as u32
+        };
+
         // Simple download loop from peer
         loop {
             let msg = PeerMessage::read(&mut stream).await?;
@@ -402,12 +414,15 @@ impl TorrentDownloader {
                 }
                 PeerMessage::Unchoke => {
                     if piece_index < total_pieces {
-                        let req = PeerMessage::Request {
-                            index: piece_index,
-                            begin: block_offset,
-                            length: 16384,
-                        };
-                        stream.write_all(&req.serialize()).await?;
+                        let req_len = get_request_length(piece_index, block_offset);
+                        if req_len > 0 {
+                            let req = PeerMessage::Request {
+                                index: piece_index,
+                                begin: block_offset,
+                                length: req_len,
+                            };
+                            stream.write_all(&req.serialize()).await?;
+                        }
                     }
                 }
                 PeerMessage::Piece {
@@ -437,12 +452,15 @@ impl TorrentDownloader {
                     }
 
                     if piece_index < total_pieces {
-                        let req = PeerMessage::Request {
-                            index: piece_index,
-                            begin: block_offset,
-                            length: 16384,
-                        };
-                        stream.write_all(&req.serialize()).await?;
+                        let req_len = get_request_length(piece_index, block_offset);
+                        if req_len > 0 {
+                            let req = PeerMessage::Request {
+                                index: piece_index,
+                                begin: block_offset,
+                                length: req_len,
+                            };
+                            stream.write_all(&req.serialize()).await?;
+                        }
                     }
                 }
                 _ => {}
@@ -454,11 +472,14 @@ impl TorrentDownloader {
         let absolute_offset = (piece_index as u64 * self.meta.info.piece_length) + offset as u64;
 
         match &self.meta.info.mode {
-            FileMode::Single { .. } => {
+            FileMode::Single { length } => {
                 let file_path = self.download_dir.join(&self.meta.info.name);
                 let mut file = OpenOptions::new().write(true).open(file_path)?;
                 file.seek(SeekFrom::Start(absolute_offset))?;
-                file.write_all(data)?;
+                
+                let remaining = length.saturating_sub(absolute_offset);
+                let to_write = (data.len() as u64).min(remaining) as usize;
+                file.write_all(&data[..to_write])?;
             }
             FileMode::Multi { files } => {
                 let parent_dir = self.download_dir.join(&self.meta.info.name);
