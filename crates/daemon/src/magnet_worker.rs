@@ -313,7 +313,9 @@ impl MagnetWorker {
                     timeout(Duration::from_secs(15), PeerMessage::read(&mut stream))
                         .await??;
                 if let PeerMessage::Extended { msg_id, payload } = msg {
-                    if msg_id == ut_metadata_id {
+                    // We told the peer in our extended handshake that our ut_metadata ID is 1.
+                    // Therefore, any ut_metadata messages they send to us will have msg_id == 1.
+                    if msg_id == 1 {
                         let mut offset = 0;
                         let dict =
                             torrent_core::bencode::Bencode::decode_inner(&payload, &mut offset);
