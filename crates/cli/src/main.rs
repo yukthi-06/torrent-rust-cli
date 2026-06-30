@@ -125,8 +125,8 @@ async fn main() -> anyhow::Result<()> {
                 println!("No torrents loaded.");
             } else {
                 println!(
-                    "{:<4} {:<35} {:<10} {:<10} {:<12} {:<6}",
-                    "ID", "Name", "Size", "Progress", "Status", "Peers"
+                    "{:<3} {:<33} {:<10} {:<8} {:<5} {:<17}",
+                    "ID", "Name", "Size", "Progress", "Peers", "Status"
                 );
                 println!("{}", "-".repeat(80));
                 for t in list {
@@ -143,8 +143,8 @@ async fn main() -> anyhow::Result<()> {
                     };
 
                     println!(
-                        "{:<4} {:<35} {:<10} {:<10} {:<12} {:<6}",
-                        t.id, display_name, size_mb, progress_str, t.status, t.peers_connected
+                        "{:<3} {:<33} {:<10} {:<8} {:<5} {:<17}",
+                        t.id.0, display_name, size_mb, progress_str, t.peers_connected, t.status
                     );
                 }
             }
