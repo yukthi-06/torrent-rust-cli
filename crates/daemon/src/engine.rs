@@ -43,87 +43,104 @@ impl TorrentDownloader {
     }
 
     pub async fn start(self: Arc<Self>) {
-        tokio::spawn(async move {
-            info!(
-                "Starting download worker for torrent: {}",
-                self.meta.info.name
-            );
+        info!(
+            "Starting download worker for torrent: {}",
+            self.meta.info.name
+        );
 
-            // 1. Initialize files on disk
-            if let Err(e) = self.initialize_files() {
-                error!("Failed to initialize files for torrent {}: {}", self.id, e);
-                return;
+        match self.verify_and_resume().await {
+            Ok((verified, total)) => {
+                if verified < total {
+                    self.start_announce_loop().await;
+                }
             }
+            Err(e) => {
+                error!("Failed to initialize/verify torrent {}: {}", self.id, e);
+            }
+        }
+    }
 
-            // 2. Verify existing pieces on disk and resume from correct position
-            let completed_pieces = self.verify_pieces();
-            let total_pieces = self.meta.info.pieces.len() as u32;
-            let missing_list: Vec<u32> = completed_pieces
+    pub async fn verify_and_resume(self: &Arc<Self>) -> Result<(usize, usize), anyhow::Error> {
+        // 1. Initialize files on disk
+        self.initialize_files()?;
+
+        // 2. Verify existing pieces on disk (in a blocking thread)
+        let self_clone = Arc::clone(self);
+        let completed_pieces = tokio::task::spawn_blocking(move || {
+            self_clone.verify_pieces()
+        }).await.expect("Spawn blocking failed");
+
+        let total_pieces = self.meta.info.pieces.len() as u32;
+        let missing_list: Vec<u32> = completed_pieces
+            .iter()
+            .enumerate()
+            .filter(|(_, &done)| !done)
+            .map(|(i, _)| i as u32)
+            .collect();
+        let is_completed = missing_list.is_empty();
+        let first_missing_piece = missing_list.first().copied().unwrap_or(total_pieces);
+        *self.missing_pieces.lock().await = missing_list;
+
+        let verified_downloaded =
+            completed_pieces
                 .iter()
                 .enumerate()
-                .filter(|(_, &done)| !done)
-                .map(|(i, _)| i as u32)
-                .collect();
-            let is_completed = missing_list.is_empty();
-            let first_missing_piece = missing_list.first().copied().unwrap_or(total_pieces);
-            *self.missing_pieces.lock().await = missing_list;
-
-            let verified_downloaded =
-                completed_pieces
-                    .iter()
-                    .enumerate()
-                    .fold(0u64, |acc, (i, &done)| {
-                        if done {
-                            let piece_len = if i as u32 == total_pieces - 1 {
-                                // Last piece may be shorter
-                                let total_size = {
-                                    match &self.meta.info.mode {
-                                        FileMode::Single { length } => *length,
-                                        FileMode::Multi { files } => {
-                                            files.iter().map(|f| f.length).sum()
-                                        }
+                .fold(0u64, |acc, (i, &done)| {
+                    if done {
+                        let piece_len = if i as u32 == total_pieces - 1 {
+                            let total_size = {
+                                match &self.meta.info.mode {
+                                    FileMode::Single { length } => *length,
+                                    FileMode::Multi { files } => {
+                                        files.iter().map(|f| f.length).sum()
                                     }
-                                };
-                                let full_pieces_size =
-                                    (total_pieces as u64 - 1) * self.meta.info.piece_length;
-                                total_size - full_pieces_size
-                            } else {
-                                self.meta.info.piece_length
+                                }
                             };
-                            acc + piece_len
+                            let full_pieces_size =
+                                (total_pieces as u64 - 1) * self.meta.info.piece_length;
+                            total_size - full_pieces_size
                         } else {
-                            acc
-                        }
-                    });
+                            self.meta.info.piece_length
+                        };
+                        acc + piece_len
+                    } else {
+                        acc
+                    }
+                });
 
-            {
-                let mut lock = self.state.lock().await;
-                let total_size = lock.size;
-                lock.downloaded = verified_downloaded.min(total_size);
-                lock.status = if is_completed {
-                    "Completed".to_string()
-                } else {
-                    "Downloading".to_string()
-                };
-            }
+        {
+            let mut lock = self.state.lock().await;
+            let total_size = lock.size;
+            lock.downloaded = verified_downloaded.min(total_size);
+            lock.status = if is_completed {
+                "Completed".to_string()
+            } else {
+                "Downloading".to_string()
+            };
+        }
 
-            if is_completed {
-                info!(
-                    "Torrent {} already complete, skipping download",
-                    self.meta.info.name
-                );
-                return;
-            }
+        let verified_count = completed_pieces.iter().filter(|&&d| d).count();
 
+        if is_completed {
+            info!(
+                "Torrent {} already complete, skipping download",
+                self.meta.info.name
+            );
+        } else {
             info!(
                 "Torrent {}: {}/{} pieces verified, resuming from piece {}",
                 self.meta.info.name,
-                completed_pieces.iter().filter(|&&d| d).count(),
+                verified_count,
                 total_pieces,
                 first_missing_piece
             );
+        }
 
-            // 3. Announce loop
+        Ok((verified_count, total_pieces as usize))
+    }
+
+    pub async fn start_announce_loop(self: Arc<Self>) {
+        // 3. Announce loop
             let mut peer_tasks = tokio::task::JoinSet::new();
             loop {
                 let mut trackers = Vec::new();
@@ -239,7 +256,7 @@ impl TorrentDownloader {
                     }
                 }
             }
-        });
+        }
     }
 
     /// Reads each piece from disk and SHA1-hashes it against the expected piece hash.

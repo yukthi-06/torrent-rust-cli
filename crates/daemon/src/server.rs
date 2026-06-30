@@ -87,7 +87,7 @@ impl RpcServer {
             let path = path.clone();
             let id = *id;
             tokio::spawn(async move {
-                server.restore_torrent(id, &path).await;
+                server.restore_torrent(id, &path, false).await;
             });
         }
         // Advance next_id past all restored IDs so new torrents get unique IDs
@@ -101,14 +101,15 @@ impl RpcServer {
         }
     }
 
-    async fn restore_torrent(&self, id: u32, path: &str) {
+    /// If wait_for_verify is true, synchronously runs hash checking and returns the result string.
+    pub async fn restore_torrent(&self, id: u32, path: &str, wait_for_verify: bool) -> Option<String> {
         // Handle magnet links
         if path.starts_with("magnet:?") {
             let magnet = match torrent_core::magnet::MagnetLink::parse(path) {
                 Ok(m) => m,
                 Err(e) => {
                     error!("Restore: failed to parse magnet link: {}", e);
-                    return;
+                    return None;
                 }
             };
 
@@ -120,8 +121,6 @@ impl RpcServer {
             let cache_path = format!("{}/{}.torrent", self.config.metadata_dir, info_hash_str);
             if std::path::Path::new(&cache_path).exists() {
                 info!("Found cached metadata for magnet link: {}", info_hash_str);
-                // We re-bind path to the cache file and break out of the magnet block
-                // so it falls through to the .torrent file handler below!
             } else {
                 let torrent_id = TorrentId(id);
                 let torrent_state = Arc::new(Mutex::new(TorrentState {
@@ -156,7 +155,7 @@ impl RpcServer {
                     worker.start().await;
                 });
                 *handle.worker_handle.lock().await = Some(join_handle);
-                return;
+                return None;
             }
         }
 
@@ -173,14 +172,14 @@ impl RpcServer {
             Ok(b) => b,
             Err(e) => {
                 error!("Restore: failed to read {}: {}", path, e);
-                return;
+                return None;
             }
         };
         let meta = match TorrentMeta::from_bytes(&bytes) {
             Ok(m) => m,
             Err(e) => {
                 error!("Restore: failed to parse {}: {}", path, e);
-                return;
+                return None;
             }
         };
         let size = match &meta.info.mode {
@@ -194,7 +193,7 @@ impl RpcServer {
             name: meta.info.name.clone(),
             info_hash: meta.info_hash.to_string(),
             size,
-            downloaded: 0, // Engine will correct this via hash check
+            downloaded: 0,
             status,
             peers_connected: 0,
         }));
@@ -220,10 +219,38 @@ impl RpcServer {
             "Resumed torrent ID {} (hashing pieces...)",
             id
         );
-        let join_handle = tokio::spawn(async move {
-            downloader.start().await;
-        });
-        *handle.worker_handle.lock().await = Some(join_handle);
+        
+        if wait_for_verify {
+            let verified_msg = match downloader.verify_and_resume().await {
+                Ok((verified, total)) => {
+                    let percentage = if total > 0 { (verified as f32 / total as f32) * 100.0 } else { 0.0 };
+                    Some(format!("{}/{} verified ({:.1}%)", verified, total, percentage))
+                }
+                Err(e) => {
+                    error!("Verification failed: {}", e);
+                    None
+                }
+            };
+            let downloader_clone = Arc::clone(&downloader);
+            let join_handle = tokio::spawn(async move {
+                downloader_clone.start_announce_loop().await;
+            });
+            *handle.worker_handle.lock().await = Some(join_handle);
+            verified_msg
+        } else {
+            let join_handle = tokio::spawn(async move {
+                match downloader.verify_and_resume().await {
+                    Ok((verified, total)) => {
+                        if verified < total {
+                            downloader.start_announce_loop().await;
+                        }
+                    }
+                    Err(e) => error!("Failed to initialize/verify torrent {}: {}", downloader.id, e),
+                }
+            });
+            *handle.worker_handle.lock().await = Some(join_handle);
+            None
+        }
     }
 
     /// Flushes current download progress of all torrents to the state file.
@@ -551,17 +578,10 @@ impl RpcServer {
                 let mut peer_id = [0u8; 20];
                 peer_id[0..8].copy_from_slice(b"-AG0001-"); // Client prefix
 
-                let downloader = Arc::new(engine::TorrentDownloader::new(
-                    new_id,
-                    meta,
-                    download_dir,
-                    peer_id,
-                    Arc::clone(&handle.state),
-                ));
-                let join_handle = tokio::spawn(async move {
-                    downloader.start().await;
+                let server = Arc::clone(self);
+                tokio::spawn(async move {
+                    server.restore_torrent(new_id.0, &path_or_magnet, false).await;
                 });
-                *handle.worker_handle.lock().await = Some(join_handle);
 
                 Response::TorrentAdded { id: new_id }
             }
@@ -678,7 +698,7 @@ impl RpcServer {
                         drop(map);
                         let server = Arc::clone(self);
                         tokio::spawn(async move {
-                            server.restore_torrent(id.0, &p).await;
+                            server.restore_torrent(id.0, &p, false).await;
                         });
                         Response::Ok
                     } else {
@@ -706,10 +726,12 @@ impl RpcServer {
                         drop(t);
                         drop(map);
                         let server = Arc::clone(self);
-                        tokio::spawn(async move {
-                            server.restore_torrent(id.0, &p).await;
-                        });
-                        Response::Ok
+                        let result = server.restore_torrent(id.0, &p, true).await;
+                        if let Some(msg) = result {
+                            Response::Info(msg)
+                        } else {
+                            Response::Error("Could not verify (torrent is fetching metadata or an internal error occurred)".to_string())
+                        }
                     } else {
                         Response::Error("Torrent data path not found".to_string())
                     }
