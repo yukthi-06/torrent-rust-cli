@@ -229,7 +229,6 @@ impl TorrentDownloader {
     /// Returns a Vec<bool> where true means the piece is complete and verified.
     fn verify_pieces(&self) -> Vec<bool> {
         let total_pieces = self.meta.info.pieces.len();
-        let piece_length = self.meta.info.piece_length as usize;
         let total_size: u64 = match &self.meta.info.mode {
             FileMode::Single { length } => *length,
             FileMode::Multi { files } => files.iter().map(|f| f.length).sum(),
