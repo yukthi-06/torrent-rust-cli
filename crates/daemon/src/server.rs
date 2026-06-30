@@ -95,6 +95,49 @@ impl RpcServer {
     }
 
     async fn restore_torrent(&self, id: u32, path: &str, downloaded: u64) {
+        // Handle magnet links
+        if path.starts_with("magnet:?") {
+            let magnet = match torrent_core::magnet::MagnetLink::parse(path) {
+                Ok(m) => m,
+                Err(e) => {
+                    error!("Restore: failed to parse magnet link: {}", e);
+                    return;
+                }
+            };
+
+            let info_hash_str = magnet.info_hash.to_string();
+            let torrent_name = magnet
+                .name
+                .clone()
+                .unwrap_or_else(|| info_hash_str.clone());
+            let torrent_id = TorrentId(id);
+            let torrent_state = Arc::new(Mutex::new(TorrentState {
+                id: torrent_id,
+                name: torrent_name,
+                info_hash: info_hash_str,
+                size: 0,
+                downloaded: 0,
+                status: "Fetching Metadata".to_string(),
+            }));
+
+            {
+                let mut map = self.torrents.lock().await;
+                map.insert(torrent_id, Arc::clone(&torrent_state));
+            }
+
+            let download_dir = PathBuf::from("downloads");
+            let worker = Arc::new(crate::magnet_worker::MagnetWorker {
+                id: torrent_id,
+                magnet,
+                download_dir,
+                state: torrent_state,
+            });
+            info!("Resumed magnet torrent ID {}", id);
+            worker.start().await;
+            return;
+        }
+
+        // Handle .torrent file paths
         let bytes = match std::fs::read(path) {
             Ok(b) => b,
             Err(e) => {

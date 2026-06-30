@@ -122,19 +122,33 @@ impl MagnetWorker {
         all_peers.sort();
         all_peers.dedup();
 
+        let mut last_errors: Vec<String> = Vec::new();
+
         for peer_addr in &all_peers {
             info!("Attempting metadata fetch from {}", peer_addr);
             match self.try_fetch_from_peer(*peer_addr, peer_id).await {
                 Ok(meta) => return Ok(meta),
                 Err(e) => {
-                    warn!("Failed to fetch metadata from {}: {}", peer_addr, e);
+                    let err_msg = format!("{}: {}", peer_addr, e);
+                    warn!("Failed to fetch metadata from {}", err_msg);
+                    last_errors.push(err_msg);
                 }
             }
         }
 
+        // Show last 3 errors in the status so user can see what went wrong
+        let error_detail = last_errors
+            .iter()
+            .rev()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; ");
+
         anyhow::bail!(
-            "Could not fetch metadata from any of {} peers",
-            all_peers.len()
+            "Could not fetch metadata from any of {} peers. Last errors: {}",
+            all_peers.len(),
+            error_detail
         )
     }
 
