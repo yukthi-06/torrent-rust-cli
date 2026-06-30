@@ -573,10 +573,7 @@ impl RpcServer {
                     map.insert(new_id, Arc::clone(&handle));
                 }
 
-                // Spawn downloader worker
-                let download_dir = PathBuf::from(&self.config.download_dir);
-                let mut peer_id = [0u8; 20];
-                peer_id[0..8].copy_from_slice(b"-AG0001-"); // Client prefix
+                // Spawn downloader worker via restore_torrent
 
                 let server = Arc::clone(self);
                 tokio::spawn(async move {
