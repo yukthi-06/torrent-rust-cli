@@ -22,7 +22,7 @@ impl MagnetWorker {
                 self.magnet.info_hash
             );
 
-            // For now, we will simulate the metadata fetching failure 
+            // For now, we will simulate the metadata fetching failure
             // since BEP 9 (ut_metadata) state machine requires a significant peer management loop
             // comparable to TorrentDownloader.
             // A real implementation would:
