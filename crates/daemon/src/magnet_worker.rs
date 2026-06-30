@@ -17,8 +17,11 @@ pub struct MagnetWorker {
 impl MagnetWorker {
     pub async fn start(self: Arc<Self>) {
         tokio::spawn(async move {
-            info!("Starting magnet metadata fetch for: {}", self.magnet.info_hash);
-            
+            info!(
+                "Starting magnet metadata fetch for: {}",
+                self.magnet.info_hash
+            );
+
             // For now, we will simulate the metadata fetching failure 
             // since BEP 9 (ut_metadata) state machine requires a significant peer management loop
             // comparable to TorrentDownloader.
@@ -34,7 +37,7 @@ impl MagnetWorker {
                 let mut lock = self.state.lock().await;
                 lock.status = "Failed (Metadata fetch not fully implemented)".to_string();
             }
-            
+
             error!("Magnet link metadata fetching is not yet fully implemented.");
         });
     }

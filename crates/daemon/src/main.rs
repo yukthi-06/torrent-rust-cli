@@ -1,6 +1,6 @@
 mod engine;
-mod server;
 pub mod magnet_worker;
+mod server;
 
 use server::RpcServer;
 use std::sync::Arc;
