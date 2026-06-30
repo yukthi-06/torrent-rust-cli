@@ -44,7 +44,7 @@ impl MagnetWorker {
                         peer_id,
                         Arc::clone(&self.state),
                     ));
-                    
+
                     {
                         let mut lock = self.state.lock().await;
                         lock.status = "Downloading".to_string();
@@ -69,9 +69,13 @@ impl MagnetWorker {
         let mut all_peers = Vec::new();
         for tr in &self.magnet.trackers {
             let res = if tr.starts_with("udp://") {
-                tracker.announce_udp(tr, self.magnet.info_hash.0, peer_id, 6881).await
+                tracker
+                    .announce_udp(tr, self.magnet.info_hash.0, peer_id, 6881)
+                    .await
             } else {
-                tracker.announce_http(tr, self.magnet.info_hash.0, peer_id, 6881).await
+                tracker
+                    .announce_http(tr, self.magnet.info_hash.0, peer_id, 6881)
+                    .await
             };
             if let Ok(peers) = res {
                 all_peers.extend(peers);
@@ -150,8 +154,8 @@ impl MagnetWorker {
 
         let ut_metadata_id =
             ut_metadata_id.ok_or_else(|| anyhow::anyhow!("Peer doesn't support ut_metadata"))?;
-        let metadata_size =
-            metadata_size.ok_or_else(|| anyhow::anyhow!("No metadata_size in extended handshake"))?;
+        let metadata_size = metadata_size
+            .ok_or_else(|| anyhow::anyhow!("No metadata_size in extended handshake"))?;
 
         if metadata_size > 10 * 1024 * 1024 {
             // 10 MB sanity check
@@ -179,14 +183,16 @@ impl MagnetWorker {
                 if let PeerMessage::Extended { msg_id, payload } = msg {
                     if msg_id == ut_metadata_id {
                         let mut offset = 0;
-                        let dict = torrent_core::bencode::Bencode::decode_inner(&payload, &mut offset);
+                        let dict =
+                            torrent_core::bencode::Bencode::decode_inner(&payload, &mut offset);
                         if let Ok(Bencode::Dict(d)) = dict {
                             if let Some(Bencode::Int(msg_type)) = d.get(b"msg_type".as_ref()) {
                                 if *msg_type == 1 {
                                     let data = &payload[offset..];
                                     let start = i * 16384;
                                     let end = (start + data.len()).min(metadata_size);
-                                    metadata_bytes[start..end].copy_from_slice(&data[..end - start]);
+                                    metadata_bytes[start..end]
+                                        .copy_from_slice(&data[..end - start]);
                                     break;
                                 }
                             }
