@@ -736,7 +736,23 @@ impl RpcServer {
                     Response::Error(format!("Torrent ID {} not found", id))
                 }
             }
-            Request::Create { .. } => Response::Ok,
+            Request::Create { path } => {
+                let path_clone = path.clone();
+                match tokio::task::spawn_blocking(move || {
+                    crate::creator::create_torrent(&path_clone, "udp://tracker.opentrackr.org:1337/announce")
+                }).await {
+                    Ok(Ok(bytes)) => {
+                        let out_path = format!("{}.torrent", path);
+                        if let Err(e) = std::fs::write(&out_path, bytes) {
+                            Response::Error(format!("Failed to write .torrent file: {}", e))
+                        } else {
+                            Response::Info(format!("Successfully created {}", out_path))
+                        }
+                    }
+                    Ok(Err(e)) => Response::Error(format!("Failed to create torrent: {}", e)),
+                    Err(e) => Response::Error(format!("Task panicked: {}", e)),
+                }
+            }
             Request::Info { id } => {
                 let map = self.torrents.lock().await;
                 if let Some(handle) = map.get(&id) {

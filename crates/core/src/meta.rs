@@ -46,7 +46,73 @@ pub struct TorrentFile {
     pub path: Vec<String>,
 }
 
+impl FileMode {
+    pub fn to_bencode_fields(&self, dict: &mut BTreeMap<Vec<u8>, Bencode>) {
+        match self {
+            FileMode::Single { length } => {
+                dict.insert(b"length".to_vec(), Bencode::Int(*length as i64));
+            }
+            FileMode::Multi { files } => {
+                let mut list = Vec::new();
+                for f in files {
+                    let mut d = BTreeMap::new();
+                    d.insert(b"length".to_vec(), Bencode::Int(f.length as i64));
+                    let mut path_list = Vec::new();
+                    for p in &f.path {
+                        path_list.push(Bencode::ByteString(p.as_bytes().to_vec()));
+                    }
+                    d.insert(b"path".to_vec(), Bencode::List(path_list));
+                    list.push(Bencode::Dict(d));
+                }
+                dict.insert(b"files".to_vec(), Bencode::List(list));
+            }
+        }
+    }
+}
+
+impl InfoDict {
+    pub fn to_bencode(&self) -> Bencode {
+        let mut dict = BTreeMap::new();
+        dict.insert(b"name".to_vec(), Bencode::ByteString(self.name.as_bytes().to_vec()));
+        dict.insert(b"piece length".to_vec(), Bencode::Int(self.piece_length as i64));
+        
+        let mut pieces_bytes = Vec::with_capacity(self.pieces.len() * 20);
+        for p in &self.pieces {
+            pieces_bytes.extend_from_slice(p);
+        }
+        dict.insert(b"pieces".to_vec(), Bencode::ByteString(pieces_bytes));
+        
+        self.mode.to_bencode_fields(&mut dict);
+        
+        Bencode::Dict(dict)
+    }
+}
+
 impl TorrentMeta {
+    pub fn to_bencode(&self) -> Bencode {
+        let mut dict = BTreeMap::new();
+        dict.insert(b"announce".to_vec(), Bencode::ByteString(self.announce.as_bytes().to_vec()));
+        
+        if let Some(list) = &self.announce_list {
+            let mut outer_list = Vec::new();
+            for tier in list {
+                let mut inner_list = Vec::new();
+                for url in tier {
+                    inner_list.push(Bencode::ByteString(url.as_bytes().to_vec()));
+                }
+                outer_list.push(Bencode::List(inner_list));
+            }
+            dict.insert(b"announce-list".to_vec(), Bencode::List(outer_list));
+        }
+        
+        dict.insert(b"info".to_vec(), self.info.to_bencode());
+        
+        Bencode::Dict(dict)
+    }
+
+    pub fn into_bytes(&self) -> Vec<u8> {
+        self.to_bencode().encode()
+    }
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, MetaError> {
         let bencode = Bencode::decode(bytes)?;
         let dict = match bencode {
