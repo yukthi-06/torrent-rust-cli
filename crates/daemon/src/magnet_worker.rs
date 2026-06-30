@@ -18,6 +18,7 @@ pub struct MagnetWorker {
     pub id: TorrentId,
     pub magnet: MagnetLink,
     pub download_dir: PathBuf,
+    pub metadata_dir: PathBuf,
     pub state: Arc<Mutex<TorrentState>>,
 }
 
@@ -135,8 +136,8 @@ impl MagnetWorker {
                                 let full_meta_bytes = Bencode::Dict(root).encode();
                                 
                                 // Save to file store cache
-                                let _ = std::fs::create_dir_all("metadata");
-                                let path = format!("metadata/{}.torrent", self.magnet.info_hash);
+                                let _ = std::fs::create_dir_all(&self.metadata_dir);
+                                let path = self.metadata_dir.join(format!("{}.torrent", self.magnet.info_hash));
                                 if let Err(e) = std::fs::write(&path, &full_meta_bytes) {
                                     tracing::warn!("Failed to save metadata to cache: {}", e);
                                 }

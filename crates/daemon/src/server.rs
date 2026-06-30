@@ -51,6 +51,7 @@ pub struct TorrentState {
 }
 
 pub struct RpcServer {
+    config: Arc<torrent_config::Config>,
     torrents: Mutex<HashMap<TorrentId, Arc<Mutex<TorrentState>>>>,
     /// Tracks (id, torrent_file_path) for persistence
     saved_paths: Mutex<HashMap<u32, String>>,
@@ -58,8 +59,9 @@ pub struct RpcServer {
 }
 
 impl RpcServer {
-    pub fn new() -> Self {
+    pub fn new(config: Arc<torrent_config::Config>) -> Self {
         Self {
+            config,
             torrents: Mutex::new(HashMap::new()),
             saved_paths: Mutex::new(HashMap::new()),
             next_id: AtomicU32::new(1),
@@ -111,7 +113,7 @@ impl RpcServer {
                 .name
                 .clone()
                 .unwrap_or_else(|| info_hash_str.clone());
-            let cache_path = format!("metadata/{}.torrent", info_hash_str);
+            let cache_path = format!("{}/{}.torrent", self.config.metadata_dir, info_hash_str);
             if std::path::Path::new(&cache_path).exists() {
                 info!("Found cached metadata for magnet link: {}", info_hash_str);
                 // We re-bind path to the cache file and break out of the magnet block
@@ -133,11 +135,12 @@ impl RpcServer {
                     map.insert(torrent_id, Arc::clone(&torrent_state));
                 }
 
-                let download_dir = PathBuf::from("downloads");
+                let download_dir = PathBuf::from(&self.config.download_dir);
                 let worker = Arc::new(crate::magnet_worker::MagnetWorker {
                     id: torrent_id,
                     magnet,
                     download_dir,
+                    metadata_dir: PathBuf::from(&self.config.metadata_dir),
                     state: torrent_state,
                 });
                 info!("Resumed magnet torrent ID {}", id);
@@ -149,7 +152,7 @@ impl RpcServer {
         // Use the cache path if we found one, otherwise use the original .torrent path
         let path = if path.starts_with("magnet:?") {
             let magnet = torrent_core::magnet::MagnetLink::parse(path).unwrap();
-            format!("metadata/{}.torrent", magnet.info_hash)
+            format!("{}/{}.torrent", self.config.metadata_dir, magnet.info_hash)
         } else {
             path.to_string()
         };
@@ -192,7 +195,7 @@ impl RpcServer {
             let mut map = self.torrents.lock().await;
             map.insert(torrent_id, Arc::clone(&torrent_state));
         }
-        let download_dir = PathBuf::from("downloads");
+        let download_dir = PathBuf::from(&self.config.download_dir);
         let mut peer_id = [0u8; 20];
         peer_id[0..8].copy_from_slice(b"-AG0001-");
         let downloader = Arc::new(engine::TorrentDownloader::new(
@@ -354,10 +357,14 @@ impl RpcServer {
                 
                 // If it's exactly 40 characters of hex, treat it as a bare info hash
                 if path_or_magnet.len() == 40 && path_or_magnet.chars().all(|c| c.is_ascii_hexdigit()) {
-                    // Convert it to a magnet URI and add a couple of reliable public trackers so we can find peers
+                    let mut trackers_str = String::new();
+                    for tracker in &self.config.default_trackers {
+                        let encoded = url::form_urlencoded::byte_serialize(tracker.as_bytes()).collect::<String>();
+                        trackers_str.push_str(&format!("&tr={}", encoded));
+                    }
                     path_or_magnet = format!(
-                        "magnet:?xt=urn:btih:{}&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A80%2Fannounce",
-                        path_or_magnet
+                        "magnet:?xt=urn:btih:{}{}",
+                        path_or_magnet, trackers_str
                     );
                 }
 
@@ -381,7 +388,7 @@ impl RpcServer {
                         }
                     }
 
-                    let cache_path = format!("metadata/{}.torrent", info_hash_str);
+                    let cache_path = format!("{}/{}.torrent", self.config.metadata_dir, info_hash_str);
                     if std::path::Path::new(&cache_path).exists() {
                         info!("Found cached metadata for magnet link: {}", info_hash_str);
                         
@@ -425,11 +432,12 @@ impl RpcServer {
                             save_state(&entries);
                         }
 
-                        let download_dir = PathBuf::from("downloads");
+                        let download_dir = PathBuf::from(&self.config.download_dir);
                         let worker = Arc::new(crate::magnet_worker::MagnetWorker {
                             id: new_id,
                             magnet,
                             download_dir,
+                            metadata_dir: PathBuf::from(&self.config.metadata_dir),
                             state: torrent_state,
                         });
                         worker.start().await;
@@ -476,7 +484,7 @@ impl RpcServer {
                     }
                 }
 
-                let new_id = if path_or_magnet.starts_with("metadata/") {
+                let new_id = if path_or_magnet.starts_with(&format!("{}/", self.config.metadata_dir)) {
                     // We already allocated an ID above if we fell through from the magnet cache logic
                     let max_id = self.next_id.load(Ordering::SeqCst) - 1;
                     TorrentId(max_id)
@@ -510,7 +518,7 @@ impl RpcServer {
                 }
 
                 // Spawn downloader worker
-                let download_dir = PathBuf::from("downloads");
+                let download_dir = PathBuf::from(&self.config.download_dir);
                 let mut peer_id = [0u8; 20];
                 peer_id[0..8].copy_from_slice(b"-AG0001-"); // Client prefix
 

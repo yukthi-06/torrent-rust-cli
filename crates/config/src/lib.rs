@@ -1,39 +1,44 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub download_dir: PathBuf,
-    pub listen_port: u16,
-    pub max_upload: Option<usize>, // in bytes/sec, None means unlimited
-    pub max_download: Option<usize>, // in bytes/sec, None means unlimited
-    pub max_connections: usize,
-    pub enable_dht: bool,
-    pub enable_utp: bool,
-    pub enable_upnp: bool,
+    pub download_dir: String,
+    pub metadata_dir: String,
+    pub data_write_frequency_secs: u64,
+    pub default_trackers: Vec<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            download_dir: PathBuf::from("downloads"),
-            listen_port: 6881,
-            max_upload: None,
-            max_download: None,
-            max_connections: 200,
-            enable_dht: true,
-            enable_utp: true,
-            enable_upnp: true,
+            download_dir: "downloads".to_string(),
+            metadata_dir: "metadata".to_string(),
+            data_write_frequency_secs: 5,
+            default_trackers: vec![
+                "udp://tracker.opentrackr.org:1337/announce".to_string(),
+                "udp://tracker.openbittorrent.com:80/announce".to_string(),
+            ],
         }
     }
 }
 
 impl Config {
-    pub fn load_from_str(s: &str) -> Result<Self, toml::de::Error> {
-        toml::from_str(s)
-    }
-
-    pub fn to_string(&self) -> Result<String, toml::ser::Error> {
-        toml::to_string_pretty(self)
+    pub fn load() -> Self {
+        let path = "config.json";
+        if let Ok(data) = std::fs::read_to_string(path) {
+            match serde_json::from_str(&data) {
+                Ok(config) => config,
+                Err(e) => {
+                    eprintln!("Failed to parse config.json, using defaults: {}", e);
+                    Self::default()
+                }
+            }
+        } else {
+            let default = Self::default();
+            if let Ok(json) = serde_json::to_string_pretty(&default) {
+                let _ = std::fs::write(path, json);
+            }
+            default
+        }
     }
 }

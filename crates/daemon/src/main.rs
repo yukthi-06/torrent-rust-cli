@@ -31,7 +31,8 @@ async fn main() -> anyhow::Result<()> {
         .init();
     info!("Starting torrentd background daemon...");
 
-    let server = Arc::new(RpcServer::new());
+    let config = Arc::new(torrent_config::Config::load());
+    let server = Arc::new(RpcServer::new(Arc::clone(&config)));
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
     // Reload torrents saved from previous session
@@ -47,9 +48,9 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Background task: flush download progress to disk every 5 seconds
+    // Background task: flush download progress to disk at configured frequency
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(config.data_write_frequency_secs));
         loop {
             tokio::select! {
                 _ = interval.tick() => {
