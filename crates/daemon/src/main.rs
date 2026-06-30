@@ -8,14 +8,22 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Set up file logging
+    let file_appender = tracing_appender::rolling::daily("logs", "torrentd.log");
+    let (file_writer, _guard) = tracing_appender::non_blocking(file_appender);
+
     // Disable ANSI color codes when stdout is not a terminal (e.g. piped or run as a service)
     let ansi_colors = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+    
     tracing_subscriber::fmt()
         .with_ansi(ansi_colors)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("debug")), // default to debug
         )
+        .with_writer(std::io::stdout.and(file_writer))
         .init();
     info!("Starting torrentd background daemon...");
 
