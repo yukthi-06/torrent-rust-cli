@@ -8,8 +8,13 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Set up file logging
-    let file_appender = tracing_appender::rolling::daily("logs", "torrentd.log");
+    // Set up unbuffered file logging to guarantee immediate writes
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("torrentd.log")
+        .expect("Failed to open torrentd.log");
+    let file_appender = std::sync::Arc::new(log_file);
 
     // Disable ANSI color codes when stdout is not a terminal (e.g. piped or run as a service)
     let ansi_colors = std::io::IsTerminal::is_terminal(&std::io::stdout());
