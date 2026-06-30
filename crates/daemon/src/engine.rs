@@ -3,6 +3,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -21,6 +22,7 @@ pub struct TorrentDownloader {
     pub download_dir: PathBuf,
     pub peer_id: [u8; 20],
     pub state: Arc<Mutex<super::server::TorrentState>>,
+    pub next_piece_to_request: AtomicU32,
 }
 
 impl TorrentDownloader {
@@ -37,6 +39,7 @@ impl TorrentDownloader {
             download_dir,
             peer_id,
             state,
+            next_piece_to_request: AtomicU32::new(0),
         }
     }
 
@@ -61,6 +64,8 @@ impl TorrentDownloader {
                 .position(|&done| !done)
                 .map(|i| i as u32)
                 .unwrap_or(total_pieces);
+
+            self.next_piece_to_request.store(first_missing, Ordering::SeqCst);
 
             let verified_downloaded =
                 completed_pieces
@@ -212,9 +217,8 @@ impl TorrentDownloader {
                 for peer in peers {
                     let self_clone = Arc::clone(&self);
                     tokio::spawn(async move {
-                        if let Err(e) = self_clone.handle_peer(peer, first_missing).await {
-                            // Peer disconnected
-                            tracing::debug!("Peer connection to {} ended: {}", peer, e);
+                        if let Err(e) = self_clone.connect_to_peer(peer).await {
+                            warn!("Peer {} disconnected: {}", peer, e);
                         }
                     });
                 }
@@ -367,18 +371,23 @@ impl TorrentDownloader {
         Ok(())
     }
 
+    async fn connect_to_peer(
+        self: Arc<Self>,
+        addr: SocketAddr,
+    ) -> anyhow::Result<()> {
+        let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(addr)).await??;
+        self.handle_peer(&mut stream).await
+    }
+
     async fn handle_peer(
         &self,
-        addr: SocketAddr,
-        start_piece_index: u32,
+        stream: &mut TcpStream,
     ) -> Result<(), anyhow::Error> {
-        let mut stream = TcpStream::connect(addr).await?;
-
         // Handshake
         let handshake = Handshake::new(self.meta.info_hash.0, self.peer_id);
         stream.write_all(&handshake.serialize()).await?;
 
-        let server_handshake = Handshake::read(&mut stream).await?;
+        let server_handshake = Handshake::read(stream).await?;
         if server_handshake.info_hash != self.meta.info_hash.0 {
             anyhow::bail!("Info hash mismatch");
         }
@@ -411,7 +420,7 @@ impl TorrentDownloader {
             .await?;
         stream.write_all(&PeerMessage::Unchoke.serialize()).await?;
 
-        let mut piece_index = start_piece_index;
+        let mut piece_index = self.next_piece_to_request.fetch_add(1, Ordering::SeqCst);
         let mut block_offset = 0;
         let piece_length = self.meta.info.piece_length as u32;
         let total_pieces = self.meta.info.pieces.len() as u32;
@@ -472,7 +481,7 @@ impl TorrentDownloader {
                     block_offset += block.len() as u32;
                     if block_offset >= piece_length {
                         block_offset = 0;
-                        piece_index += 1;
+                        piece_index = self.next_piece_to_request.fetch_add(1, Ordering::SeqCst);
                     }
 
                     if piece_index < total_pieces {
