@@ -134,41 +134,46 @@ impl MagnetWorker {
     }
 
     async fn discover_peers(&self, peer_id: [u8; 20]) -> Vec<std::net::SocketAddr> {
-        let tracker = TrackerClient::new();
-        let mut all_peers = Vec::new();
+        let mut handles = Vec::new();
 
         for tr in &self.magnet.trackers {
-            info!("Announcing to tracker: {}", tr);
-            let res = if tr.starts_with("udp://") {
-                let host_port = tr.trim_start_matches("udp://");
-                match tracker
-                    .announce_udp(host_port, self.magnet.info_hash.0, peer_id, 6881)
-                    .await
-                {
-                    Ok(p) => Ok(p),
-                    Err(e) => {
-                        warn!("UDP tracker {} failed: {}, trying HTTP fallback", tr, e);
-                        let http_fallback = tr.replace("udp://", "http://");
-                        tracker
-                            .announce_http(&http_fallback, self.magnet.info_hash.0, peer_id, 6881)
-                            .await
+            let tr = tr.clone();
+            let info_hash = self.magnet.info_hash.0;
+            
+            handles.push(tokio::spawn(async move {
+                let tracker = TrackerClient::new();
+                info!("Announcing to tracker: {}", tr);
+                let res = if tr.starts_with("udp://") {
+                    let host_port = tr.trim_start_matches("udp://");
+                    match tracker.announce_udp(host_port, info_hash, peer_id, 6881).await {
+                        Ok(p) => Ok(p),
+                        Err(e) => {
+                            warn!("UDP tracker {} failed: {}, trying HTTP fallback", tr, e);
+                            let http_fallback = tr.replace("udp://", "http://");
+                            tracker.announce_http(&http_fallback, info_hash, peer_id, 6881).await
+                        }
                     }
-                }
-            } else if tr.starts_with("http://") {
-                tracker
-                    .announce_http(tr, self.magnet.info_hash.0, peer_id, 6881)
-                    .await
-            } else {
-                warn!("Skipping unsupported tracker: {}", tr);
-                continue;
-            };
-            match res {
-                Ok(peers) => {
-                    info!("Tracker {} returned {} peers", tr, peers.len());
-                    all_peers.extend(peers);
-                }
-                Err(e) => {
-                    warn!("Tracker {} failed: {}", tr, e);
+                } else if tr.starts_with("http://") {
+                    tracker.announce_http(&tr, info_hash, peer_id, 6881).await
+                } else {
+                    warn!("Skipping unsupported tracker: {}", tr);
+                    return (tr, Ok(Vec::new()));
+                };
+                (tr, res)
+            }));
+        }
+
+        let mut all_peers = Vec::new();
+        for handle in handles {
+            if let Ok((tr, res)) = handle.await {
+                match res {
+                    Ok(peers) => {
+                        info!("Tracker {} returned {} peers", tr, peers.len());
+                        all_peers.extend(peers);
+                    }
+                    Err(e) => {
+                        warn!("Tracker {} failed: {}", tr, e);
+                    }
                 }
             }
         }
