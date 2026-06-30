@@ -136,7 +136,7 @@ impl MagnetWorker {
                                 
                                 // Save to file store cache
                                 let _ = std::fs::create_dir_all("metadata");
-                                let path = format!("metadata/{}.torrent", hex::encode(self.magnet.info_hash.0));
+                                let path = format!("metadata/{}.torrent", self.magnet.info_hash);
                                 if let Err(e) = std::fs::write(&path, &full_meta_bytes) {
                                     tracing::warn!("Failed to save metadata to cache: {}", e);
                                 }

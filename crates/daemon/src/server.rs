@@ -153,7 +153,7 @@ impl RpcServer {
         };
 
         // Handle .torrent file paths
-        let bytes = match std::fs::read(path) {
+        let bytes = match std::fs::read(&path) {
             Ok(b) => b,
             Err(e) => {
                 error!("Restore: failed to read {}: {}", path, e);
