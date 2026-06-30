@@ -387,6 +387,28 @@ impl TorrentDownloader {
             anyhow::bail!("Info hash mismatch");
         }
 
+        // Successfully connected! Track peer connection count
+        {
+            let mut lock = self.state.lock().await;
+            lock.peers_connected += 1;
+        }
+
+        struct PeerGuard {
+            state: Arc<Mutex<crate::server::TorrentState>>,
+        }
+        impl Drop for PeerGuard {
+            fn drop(&mut self) {
+                let state = Arc::clone(&self.state);
+                tokio::spawn(async move {
+                    let mut lock = state.lock().await;
+                    lock.peers_connected = lock.peers_connected.saturating_sub(1);
+                });
+            }
+        }
+        let _guard = PeerGuard {
+            state: Arc::clone(&self.state),
+        };
+
         // Send Interested and Unchoke
         stream
             .write_all(&PeerMessage::Interested.serialize())

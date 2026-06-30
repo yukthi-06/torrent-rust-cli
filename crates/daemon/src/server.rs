@@ -47,6 +47,7 @@ pub struct TorrentState {
     pub size: u64,
     pub downloaded: u64,
     pub status: String,
+    pub peers_connected: usize,
 }
 
 pub struct RpcServer {
@@ -124,6 +125,7 @@ impl RpcServer {
                     size: 0,
                     downloaded: 0,
                     status: "Fetching Metadata".to_string(),
+                    peers_connected: 0,
                 }));
 
                 {
@@ -184,6 +186,7 @@ impl RpcServer {
             size,
             downloaded,
             status,
+            peers_connected: 0,
         }));
         {
             let mut map = self.torrents.lock().await;
@@ -405,6 +408,7 @@ impl RpcServer {
                             size: 0,
                             downloaded: 0,
                             status: "Fetching Metadata".to_string(),
+                            peers_connected: 0,
                         }));
 
                         {
@@ -497,6 +501,7 @@ impl RpcServer {
                     size,
                     downloaded: 0,
                     status: "Downloading".to_string(),
+                    peers_connected: 0,
                 }));
 
                 {
@@ -540,7 +545,7 @@ impl RpcServer {
                         },
                         download_rate: 0,
                         upload_rate: 0,
-                        peers_connected: 0,
+                        peers_connected: t.peers_connected,
                     });
                 }
                 list.sort_by_key(|t| t.id.0);
@@ -576,7 +581,7 @@ impl RpcServer {
                         },
                         download_rate: 0,
                         upload_rate: 0,
-                        peers_connected: 0,
+                        peers_connected: t.peers_connected,
                     })
                 } else {
                     Response::Error(format!("Torrent ID {} not found", status_id))
