@@ -350,7 +350,12 @@ impl RpcServer {
     async fn process_request(&self, request: Request) -> Response {
         match request {
             Request::Version => Response::Version {
-                version: env!("CARGO_PKG_VERSION").to_string(),
+                version: format!(
+                    "{} (Git: {} | Date: {})",
+                    env!("CARGO_PKG_VERSION"),
+                    env!("GIT_HASH"),
+                    env!("GIT_DATE")
+                ),
             },
             Request::Add { path_or_magnet } => {
                 let mut path_or_magnet = path_or_magnet.trim().to_string();

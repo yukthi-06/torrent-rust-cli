@@ -192,7 +192,12 @@ async fn main() -> anyhow::Result<()> {
         }
         Response::Version { version } => {
             println!("Daemon version: {}", version);
-            println!("CLI version:    {}", env!("CARGO_PKG_VERSION"));
+            println!(
+                "CLI version:    {} (Git: {} | Date: {})",
+                env!("CARGO_PKG_VERSION"),
+                env!("GIT_HASH"),
+                env!("GIT_DATE")
+            );
         }
     }
 
