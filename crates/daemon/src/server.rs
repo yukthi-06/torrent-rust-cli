@@ -110,32 +110,47 @@ impl RpcServer {
                 .name
                 .clone()
                 .unwrap_or_else(|| info_hash_str.clone());
-            let torrent_id = TorrentId(id);
-            let torrent_state = Arc::new(Mutex::new(TorrentState {
-                id: torrent_id,
-                name: torrent_name,
-                info_hash: info_hash_str,
-                size: 0,
-                downloaded: 0,
-                status: "Fetching Metadata".to_string(),
-            }));
+            let cache_path = format!("metadata/{}.torrent", info_hash_str);
+            if std::path::Path::new(&cache_path).exists() {
+                info!("Found cached metadata for magnet link: {}", info_hash_str);
+                // We re-bind path to the cache file and break out of the magnet block
+                // so it falls through to the .torrent file handler below!
+            } else {
+                let torrent_id = TorrentId(id);
+                let torrent_state = Arc::new(Mutex::new(TorrentState {
+                    id: torrent_id,
+                    name: torrent_name,
+                    info_hash: info_hash_str,
+                    size: 0,
+                    downloaded: 0,
+                    status: "Fetching Metadata".to_string(),
+                }));
 
-            {
-                let mut map = self.torrents.lock().await;
-                map.insert(torrent_id, Arc::clone(&torrent_state));
+                {
+                    let mut map = self.torrents.lock().await;
+                    map.insert(torrent_id, Arc::clone(&torrent_state));
+                }
+
+                let download_dir = PathBuf::from("downloads");
+                let worker = Arc::new(crate::magnet_worker::MagnetWorker {
+                    id: torrent_id,
+                    magnet,
+                    download_dir,
+                    state: torrent_state,
+                });
+                info!("Resumed magnet torrent ID {}", id);
+                worker.start().await;
+                return;
             }
-
-            let download_dir = PathBuf::from("downloads");
-            let worker = Arc::new(crate::magnet_worker::MagnetWorker {
-                id: torrent_id,
-                magnet,
-                download_dir,
-                state: torrent_state,
-            });
-            info!("Resumed magnet torrent ID {}", id);
-            worker.start().await;
-            return;
         }
+
+        // Use the cache path if we found one, otherwise use the original .torrent path
+        let path = if path.starts_with("magnet:?") {
+            let magnet = torrent_core::magnet::MagnetLink::parse(path).unwrap();
+            format!("metadata/{}.torrent", magnet.info_hash)
+        } else {
+            path.to_string()
+        };
 
         // Handle .torrent file paths
         let bytes = match std::fs::read(path) {
@@ -363,41 +378,60 @@ impl RpcServer {
                         }
                     }
 
-                    let new_id = TorrentId(self.next_id.fetch_add(1, Ordering::SeqCst));
-                    let torrent_name = magnet.name.clone().unwrap_or_else(|| info_hash_str.clone());
-                    let torrent_state = Arc::new(Mutex::new(TorrentState {
-                        id: new_id,
-                        name: torrent_name,
-                        info_hash: info_hash_str,
-                        size: 0,
-                        downloaded: 0,
-                        status: "Fetching Metadata".to_string(),
-                    }));
+                    let cache_path = format!("metadata/{}.torrent", info_hash_str);
+                    if std::path::Path::new(&cache_path).exists() {
+                        info!("Found cached metadata for magnet link: {}", info_hash_str);
+                        
+                        // We must still reserve the ID and persist the ORIGINAL magnet link
+                        let new_id = TorrentId(self.next_id.fetch_add(1, Ordering::SeqCst));
+                        {
+                            let mut saved = self.saved_paths.lock().await;
+                            saved.insert(new_id.0, path_or_magnet.clone());
+                            let entries: Vec<(u32, String, u64)> =
+                                saved.iter().map(|(k, v)| (*k, v.clone(), 0u64)).collect();
+                            save_state(&entries);
+                        }
+                        
+                        // Let the logic fall through to the .torrent handler below using the cache path!
+                        path_or_magnet = cache_path;
+                        
+                    } else {
+                        let new_id = TorrentId(self.next_id.fetch_add(1, Ordering::SeqCst));
+                        let torrent_name = magnet.name.clone().unwrap_or_else(|| info_hash_str.clone());
+                        let torrent_state = Arc::new(Mutex::new(TorrentState {
+                            id: new_id,
+                            name: torrent_name,
+                            info_hash: info_hash_str,
+                            size: 0,
+                            downloaded: 0,
+                            status: "Fetching Metadata".to_string(),
+                        }));
 
-                    {
-                        let mut map = self.torrents.lock().await;
-                        map.insert(new_id, Arc::clone(&torrent_state));
+                        {
+                            let mut map = self.torrents.lock().await;
+                            map.insert(new_id, Arc::clone(&torrent_state));
+                        }
+
+                        // Persist the original magnet file path so it survives restarts
+                        {
+                            let mut saved = self.saved_paths.lock().await;
+                            saved.insert(new_id.0, path_or_magnet.clone());
+                            let entries: Vec<(u32, String, u64)> =
+                                saved.iter().map(|(k, v)| (*k, v.clone(), 0u64)).collect();
+                            save_state(&entries);
+                        }
+
+                        let download_dir = PathBuf::from("downloads");
+                        let worker = Arc::new(crate::magnet_worker::MagnetWorker {
+                            id: new_id,
+                            magnet,
+                            download_dir,
+                            state: torrent_state,
+                        });
+                        worker.start().await;
+
+                        return Response::TorrentAdded { id: new_id };
                     }
-
-                    // Persist the torrent file path so it survives restarts
-                    {
-                        let mut saved = self.saved_paths.lock().await;
-                        saved.insert(new_id.0, path_or_magnet.clone());
-                        let entries: Vec<(u32, String, u64)> =
-                            saved.iter().map(|(k, v)| (*k, v.clone(), 0u64)).collect();
-                        save_state(&entries);
-                    }
-
-                    let download_dir = PathBuf::from("downloads");
-                    let worker = Arc::new(crate::magnet_worker::MagnetWorker {
-                        id: new_id,
-                        magnet,
-                        download_dir,
-                        state: torrent_state,
-                    });
-                    worker.start().await;
-
-                    return Response::TorrentAdded { id: new_id };
                 }
 
                 // Check if it's a .torrent file path
@@ -438,7 +472,24 @@ impl RpcServer {
                     }
                 }
 
-                let new_id = TorrentId(self.next_id.fetch_add(1, Ordering::SeqCst));
+                let new_id = if path_or_magnet.starts_with("metadata/") {
+                    // We already allocated an ID above if we fell through from the magnet cache logic
+                    let max_id = self.next_id.load(Ordering::SeqCst) - 1;
+                    TorrentId(max_id)
+                } else {
+                    let new_id = TorrentId(self.next_id.fetch_add(1, Ordering::SeqCst));
+                    
+                    // Only persist if we didn't just persist it in the magnet cache logic
+                    {
+                        let mut saved = self.saved_paths.lock().await;
+                        saved.insert(new_id.0, path_or_magnet.clone());
+                        let entries: Vec<(u32, String, u64)> =
+                            saved.iter().map(|(k, v)| (*k, v.clone(), 0u64)).collect();
+                        save_state(&entries);
+                    }
+                    new_id
+                };
+
                 let torrent_state = Arc::new(Mutex::new(TorrentState {
                     id: new_id,
                     name: meta.info.name.clone(),
@@ -451,15 +502,6 @@ impl RpcServer {
                 {
                     let mut map = self.torrents.lock().await;
                     map.insert(new_id, Arc::clone(&torrent_state));
-                }
-
-                // Persist the torrent file path so it survives restarts
-                {
-                    let mut saved = self.saved_paths.lock().await;
-                    saved.insert(new_id.0, path_or_magnet.clone());
-                    let entries: Vec<(u32, String, u64)> =
-                        saved.iter().map(|(k, v)| (*k, v.clone(), 0u64)).collect();
-                    save_state(&entries);
                 }
 
                 // Spawn downloader worker

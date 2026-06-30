@@ -115,13 +115,30 @@ impl MagnetWorker {
                 while let Some(res) = set.join_next().await {
                     if let Ok((peer_addr, result)) = res {
                         match result {
-                            Ok(mut meta) => {
+                            Ok((mut meta, info_dict)) => {
                                 info!("Successfully fetched metadata from {}", peer_addr);
                                 set.abort_all(); // Kill all other metadata fetching threads instantly
+                                
+                                let mut root = BTreeMap::new();
+                                root.insert(b"info".to_vec(), info_dict);
                                 
                                 if !self.magnet.trackers.is_empty() {
                                     meta.announce = self.magnet.trackers[0].clone();
                                     meta.announce_list = Some(vec![self.magnet.trackers.clone()]);
+                                    
+                                    root.insert(
+                                        b"announce".to_vec(),
+                                        Bencode::ByteString(self.magnet.trackers[0].as_bytes().to_vec()),
+                                    );
+                                }
+                                
+                                let full_meta_bytes = Bencode::Dict(root).encode();
+                                
+                                // Save to file store cache
+                                let _ = std::fs::create_dir_all("metadata");
+                                let path = format!("metadata/{}.torrent", hex::encode(self.magnet.info_hash.0));
+                                if let Err(e) = std::fs::write(&path, &full_meta_bytes) {
+                                    tracing::warn!("Failed to save metadata to cache: {}", e);
                                 }
                                 
                                 return Ok(meta);
@@ -195,7 +212,7 @@ impl MagnetWorker {
         addr: std::net::SocketAddr,
         info_hash: [u8; 20],
         our_peer_id: [u8; 20],
-    ) -> Result<torrent_core::meta::TorrentMeta, anyhow::Error> {
+    ) -> anyhow::Result<(torrent_core::meta::TorrentMeta, Bencode)> {
         tracing::debug!("Peer {}: Attempting TCP connect", addr);
         let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(addr)).await??;
 
@@ -373,12 +390,12 @@ impl MagnetWorker {
         // We have the info dict! Now synthesize a full TorrentMeta
         let info_dict = Bencode::decode(&metadata_bytes)?;
         let mut root = BTreeMap::new();
-        root.insert(b"info".to_vec(), info_dict);
+        root.insert(b"info".to_vec(), info_dict.clone());
         root.insert(b"announce".to_vec(), Bencode::ByteString(b"".to_vec())); // Dummy announce so it parses
 
         let full_meta_bytes = Bencode::Dict(root).encode();
         let meta = torrent_core::meta::TorrentMeta::from_bytes(&full_meta_bytes)?;
 
-        Ok(meta)
+        Ok((meta, info_dict))
     }
 }
