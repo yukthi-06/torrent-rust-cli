@@ -124,6 +124,7 @@ impl TorrentDownloader {
             );
 
             // 3. Announce loop
+            let mut peer_tasks = tokio::task::JoinSet::new();
             loop {
                 let mut trackers = Vec::new();
                 trackers.push(self.meta.announce.clone());
@@ -217,15 +218,26 @@ impl TorrentDownloader {
                 // Start connection workers for each peer
                 for peer in peers {
                     let self_clone = Arc::clone(&self);
-                    tokio::spawn(async move {
+                    peer_tasks.spawn(async move {
                         if let Err(e) = self_clone.connect_to_peer(peer).await {
                             warn!("Peer {} disconnected: {}", peer, e);
                         }
                     });
                 }
 
-                // Re-announce every 60 seconds
-                sleep(Duration::from_secs(60)).await;
+                // Re-announce every 60 seconds, and reap any finished peer tasks
+                let timeout = sleep(Duration::from_secs(60));
+                tokio::pin!(timeout);
+                loop {
+                    tokio::select! {
+                        _ = &mut timeout => {
+                            break;
+                        }
+                        Some(_) = peer_tasks.join_next() => {
+                            // Reaped a finished peer task
+                        }
+                    }
+                }
             }
         });
     }

@@ -50,9 +50,14 @@ pub struct TorrentState {
     pub peers_connected: usize,
 }
 
+pub struct TorrentHandle {
+    pub state: Arc<Mutex<TorrentState>>,
+    pub worker_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
 pub struct RpcServer {
     config: Arc<torrent_config::Config>,
-    torrents: Mutex<HashMap<TorrentId, Arc<Mutex<TorrentState>>>>,
+    torrents: Mutex<HashMap<TorrentId, Arc<TorrentHandle>>>,
     /// Tracks (id, torrent_file_path) for persistence
     saved_paths: Mutex<HashMap<u32, String>>,
     next_id: AtomicU32,
@@ -129,9 +134,13 @@ impl RpcServer {
                     peers_connected: 0,
                 }));
 
+                let handle = Arc::new(TorrentHandle {
+                    state: torrent_state,
+                    worker_handle: Mutex::new(None),
+                });
                 {
                     let mut map = self.torrents.lock().await;
-                    map.insert(torrent_id, Arc::clone(&torrent_state));
+                    map.insert(torrent_id, Arc::clone(&handle));
                 }
 
                 let download_dir = PathBuf::from(&self.config.download_dir);
@@ -140,10 +149,13 @@ impl RpcServer {
                     magnet,
                     download_dir,
                     metadata_dir: PathBuf::from(&self.config.metadata_dir),
-                    state: torrent_state,
+                    state: Arc::clone(&handle.state),
                 });
                 info!("Resumed magnet torrent ID {}", id);
-                worker.start().await;
+                let join_handle = tokio::spawn(async move {
+                    worker.start().await;
+                });
+                *handle.worker_handle.lock().await = Some(join_handle);
                 return;
             }
         }
@@ -186,9 +198,13 @@ impl RpcServer {
             status,
             peers_connected: 0,
         }));
+        let handle = Arc::new(TorrentHandle {
+            state: torrent_state,
+            worker_handle: Mutex::new(None),
+        });
         {
             let mut map = self.torrents.lock().await;
-            map.insert(torrent_id, Arc::clone(&torrent_state));
+            map.insert(torrent_id, Arc::clone(&handle));
         }
         let download_dir = PathBuf::from(&self.config.download_dir);
         let mut peer_id = [0u8; 20];
@@ -198,13 +214,16 @@ impl RpcServer {
             meta,
             download_dir,
             peer_id,
-            torrent_state,
+            Arc::clone(&handle.state),
         ));
         info!(
             "Resumed torrent ID {} (hashing pieces...)",
             id
         );
-        downloader.start().await;
+        let join_handle = tokio::spawn(async move {
+            downloader.start().await;
+        });
+        *handle.worker_handle.lock().await = Some(join_handle);
     }
 
     /// Flushes current download progress of all torrents to the state file.
@@ -212,8 +231,9 @@ impl RpcServer {
         let torrents = self.torrents.lock().await;
         let saved = self.saved_paths.lock().await;
         let mut entries: Vec<(u32, String)> = Vec::new();
-        for (&id, _state_lock) in torrents.iter() {
+        for (&id, handle) in torrents.iter() {
             if let Some(path) = saved.get(&id.0) {
+                let state = handle.state.lock().await;
                 entries.push((id.0, path.clone()));
             }
         }
@@ -376,8 +396,8 @@ impl RpcServer {
                     let info_hash_str = magnet.info_hash.to_string();
                     {
                         let map = self.torrents.lock().await;
-                        for existing in map.values() {
-                            let existing = existing.lock().await;
+                        for existing_handle in map.values() {
+                            let existing = existing_handle.state.lock().await;
                             if existing.info_hash == info_hash_str {
                                 return Response::Error(format!(
                                     "Torrent '{}' is already added (ID {})",
@@ -417,9 +437,13 @@ impl RpcServer {
                             peers_connected: 0,
                         }));
 
+                        let handle = Arc::new(TorrentHandle {
+                            state: torrent_state,
+                            worker_handle: Mutex::new(None),
+                        });
                         {
                             let mut map = self.torrents.lock().await;
-                            map.insert(new_id, Arc::clone(&torrent_state));
+                            map.insert(new_id, Arc::clone(&handle));
                         }
 
                         // Persist the original magnet file path so it survives restarts
@@ -437,9 +461,12 @@ impl RpcServer {
                             magnet,
                             download_dir,
                             metadata_dir: PathBuf::from(&self.config.metadata_dir),
-                            state: torrent_state,
+                            state: Arc::clone(&handle.state),
                         });
-                        worker.start().await;
+                        let join_handle = tokio::spawn(async move {
+                            worker.start().await;
+                        });
+                        *handle.worker_handle.lock().await = Some(join_handle);
 
                         return Response::TorrentAdded { id: new_id };
                     }
@@ -472,8 +499,8 @@ impl RpcServer {
                 let info_hash_str = meta.info_hash.to_string();
                 {
                     let map = self.torrents.lock().await;
-                    for existing in map.values() {
-                        let existing = existing.lock().await;
+                    for existing_handle in map.values() {
+                        let existing = existing_handle.state.lock().await;
                         if existing.info_hash == info_hash_str {
                             return Response::Error(format!(
                                 "Torrent '{}' is already added (ID {})",
@@ -511,9 +538,13 @@ impl RpcServer {
                     peers_connected: 0,
                 }));
 
+                let handle = Arc::new(TorrentHandle {
+                    state: torrent_state,
+                    worker_handle: Mutex::new(None),
+                });
                 {
                     let mut map = self.torrents.lock().await;
-                    map.insert(new_id, Arc::clone(&torrent_state));
+                    map.insert(new_id, Arc::clone(&handle));
                 }
 
                 // Spawn downloader worker
@@ -526,17 +557,20 @@ impl RpcServer {
                     meta,
                     download_dir,
                     peer_id,
-                    torrent_state,
+                    Arc::clone(&handle.state),
                 ));
-                downloader.start().await;
+                let join_handle = tokio::spawn(async move {
+                    downloader.start().await;
+                });
+                *handle.worker_handle.lock().await = Some(join_handle);
 
                 Response::TorrentAdded { id: new_id }
             }
             Request::List => {
                 let map = self.torrents.lock().await;
                 let mut list = Vec::new();
-                for t_lock in map.values() {
-                    let t = t_lock.lock().await;
+                for handle in map.values() {
+                    let t = handle.state.lock().await;
                     list.push(TorrentStatus {
                         id: t.id,
                         name: t.name.clone(),
@@ -571,8 +605,8 @@ impl RpcServer {
                     }
                 };
 
-                if let Some(t_lock) = map.get(&status_id) {
-                    let t = t_lock.lock().await;
+                if let Some(handle) = map.get(&status_id) {
+                    let t = handle.state.lock().await;
                     Response::TorrentStatus(TorrentStatus {
                         id: t.id,
                         name: t.name.clone(),
@@ -596,8 +630,10 @@ impl RpcServer {
             }
             Request::Remove { id, delete_data: _ } => {
                 let mut map = self.torrents.lock().await;
-                if map.remove(&id).is_some() {
-                    // Remove from persisted state
+                if let Some(handle) = map.remove(&id) {
+                    if let Some(worker) = handle.worker_handle.lock().await.take() {
+                        worker.abort();
+                    }
                     let mut saved = self.saved_paths.lock().await;
                     saved.remove(&id.0);
                     let entries: Vec<(u32, String)> =
@@ -610,8 +646,11 @@ impl RpcServer {
             }
             Request::Pause { id } => {
                 let map = self.torrents.lock().await;
-                if let Some(t_lock) = map.get(&id) {
-                    let mut t = t_lock.lock().await;
+                if let Some(handle) = map.get(&id) {
+                    if let Some(worker) = handle.worker_handle.lock().await.take() {
+                        worker.abort();
+                    }
+                    let mut t = handle.state.lock().await;
                     t.status = "Paused".to_string();
                     Response::Ok
                 } else {
@@ -620,18 +659,61 @@ impl RpcServer {
             }
             Request::Resume { id } => {
                 let map = self.torrents.lock().await;
-                if let Some(t_lock) = map.get(&id) {
-                    let mut t = t_lock.lock().await;
-                    t.status = "Downloading".to_string();
-                    Response::Ok
+                if let Some(handle) = map.get(&id) {
+                    let mut worker_lock = handle.worker_handle.lock().await;
+                    if worker_lock.is_some() {
+                        return Response::Error(format!("Torrent ID {} is already running", id));
+                    }
+                    let mut t = handle.state.lock().await;
+                    t.status = "Checking".to_string();
+                    
+                    let path = {
+                        let saved = self.saved_paths.lock().await;
+                        saved.get(&id.0).cloned()
+                    };
+                    
+                    if let Some(p) = path {
+                        // Drop locks before spawning to avoid deadlocks
+                        drop(t);
+                        drop(worker_lock);
+                        drop(map);
+                        let server = Arc::clone(&self);
+                        tokio::spawn(async move {
+                            server.restore_torrent(id.0, &p).await;
+                        });
+                        Response::Ok
+                    } else {
+                        Response::Error("Torrent data path not found".to_string())
+                    }
                 } else {
                     Response::Error(format!("Torrent ID {} not found", id))
                 }
             }
             Request::Verify { id } => {
                 let map = self.torrents.lock().await;
-                if map.contains_key(&id) {
-                    Response::Ok
+                if let Some(handle) = map.get(&id) {
+                    if let Some(worker) = handle.worker_handle.lock().await.take() {
+                        worker.abort();
+                    }
+                    let mut t = handle.state.lock().await;
+                    t.status = "Checking".to_string();
+                    
+                    let path = {
+                        let saved = self.saved_paths.lock().await;
+                        saved.get(&id.0).cloned()
+                    };
+                    
+                    if let Some(p) = path {
+                        drop(t);
+                        drop(map);
+                        let server = Arc::clone(&self);
+                        tokio::spawn(async move {
+                            server.restore_torrent(id.0, &p).await;
+                        });
+                        Response::Ok
+                    } else {
+                        Response::Error("Torrent data path not found".to_string())
+                    }
                 } else {
                     Response::Error(format!("Torrent ID {} not found", id))
                 }

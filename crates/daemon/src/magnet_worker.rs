@@ -24,51 +24,49 @@ pub struct MagnetWorker {
 
 impl MagnetWorker {
     pub async fn start(self: Arc<Self>) {
-        tokio::spawn(async move {
-            info!(
-                "Starting magnet metadata fetch for: {}",
-                self.magnet.info_hash
-            );
+        info!(
+            "Starting magnet metadata fetch for: {}",
+            self.magnet.info_hash
+        );
 
-            match self.fetch_metadata().await {
-                Ok(meta) => {
-                    info!("Successfully fetched metadata for magnet link!");
+        match self.fetch_metadata().await {
+            Ok(meta) => {
+                info!("Successfully fetched metadata for magnet link!");
 
-                    let size = match &meta.info.mode {
-                        torrent_core::meta::FileMode::Single { length } => *length,
-                        torrent_core::meta::FileMode::Multi { files } => {
-                            files.iter().map(|f| f.length).sum()
-                        }
-                    };
-
-                    // Update state with real metadata
-                    {
-                        let mut lock = self.state.lock().await;
-                        lock.name = meta.info.name.clone();
-                        lock.size = size;
-                        lock.status = "Downloading".to_string();
+                let size = match &meta.info.mode {
+                    torrent_core::meta::FileMode::Single { length } => *length,
+                    torrent_core::meta::FileMode::Multi { files } => {
+                        files.iter().map(|f| f.length).sum()
                     }
+                };
 
-                    let mut peer_id = [0u8; 20];
-                    peer_id[0..8].copy_from_slice(b"-AG0001-");
-
-                    let downloader = Arc::new(engine::TorrentDownloader::new(
-                        self.id,
-                        meta,
-                        self.download_dir.clone(),
-                        peer_id,
-                        Arc::clone(&self.state),
-                    ));
-
-                    downloader.start().await;
-                }
-                Err(e) => {
-                    error!("Failed to fetch metadata: {}", e);
+                // Update state with real metadata
+                {
                     let mut lock = self.state.lock().await;
-                    lock.status = format!("Failed: {}", e);
+                    lock.name = meta.info.name.clone();
+                    lock.size = size;
+                    lock.status = "Downloading".to_string();
                 }
+
+                let mut peer_id = [0u8; 20];
+                peer_id[0..8].copy_from_slice(b"-AG0001-");
+
+                let downloader = Arc::new(engine::TorrentDownloader::new(
+                    self.id,
+                    meta,
+                    self.download_dir.clone(),
+                    peer_id,
+                    Arc::clone(&self.state),
+                ));
+
+                downloader.start().await;
             }
-        });
+            Err(e) => {
+                error!("Failed to fetch metadata: {}", e);
+                let mut lock = self.state.lock().await;
+                lock.status = format!("Failed: {}", e);
+            }
+        }
     }
 
     async fn fetch_metadata(&self) -> Result<torrent_core::meta::TorrentMeta, anyhow::Error> {
