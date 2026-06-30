@@ -58,7 +58,7 @@ impl MagnetLink {
 }
 
 fn decode_hex(s: &str, out: &mut [u8]) -> bool {
-    if s.len() % 2 != 0 || s.len() / 2 != out.len() {
+    if !s.len().is_multiple_of(2) || s.len() / 2 != out.len() {
         return false;
     }
     for (i, chunk) in s.as_bytes().chunks(2).enumerate() {
