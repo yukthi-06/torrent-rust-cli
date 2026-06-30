@@ -101,22 +101,23 @@ impl MagnetWorker {
 
             // Try peers concurrently in batches of 50
             for chunk in all_peers.chunks(50) {
-                let mut handles = Vec::new();
+                let mut set = tokio::task::JoinSet::new();
                 for &peer_addr in chunk {
                     let info_hash = self.magnet.info_hash;
-                    handles.push(tokio::spawn(async move {
+                    set.spawn(async move {
                         let result =
                             Self::try_fetch_from_peer_static(peer_addr, info_hash.0, peer_id)
                                 .await;
                         (peer_addr, result)
-                    }));
+                    });
                 }
 
-                for handle in handles {
-                    if let Ok((peer_addr, result)) = handle.await {
+                while let Some(res) = set.join_next().await {
+                    if let Ok((peer_addr, result)) = res {
                         match result {
                             Ok(meta) => {
                                 info!("Successfully fetched metadata from {}", peer_addr);
+                                set.abort_all(); // Kill all other metadata fetching threads instantly
                                 return Ok(meta);
                             }
                             Err(e) => {
