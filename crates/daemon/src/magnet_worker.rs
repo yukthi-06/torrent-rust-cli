@@ -71,11 +71,72 @@ impl MagnetWorker {
     }
 
     async fn fetch_metadata(&self) -> Result<torrent_core::meta::TorrentMeta, anyhow::Error> {
-        let tracker = TrackerClient::new();
         let mut peer_id = [0u8; 20];
         peer_id[0..8].copy_from_slice(b"-AG0001-");
 
+        let mut last_error = String::from("no attempts made");
+
+        // Retry loop: re-announce and try peers up to 3 times
+        for attempt in 0..3 {
+            if attempt > 0 {
+                info!(
+                    "Metadata fetch retry {}/3, re-announcing to trackers...",
+                    attempt + 1
+                );
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+
+            let all_peers = self.discover_peers(peer_id).await;
+
+            if all_peers.is_empty() {
+                last_error = "No peers found from any tracker".to_string();
+                continue;
+            }
+
+            info!(
+                "Attempt {}: discovered {} unique peers",
+                attempt + 1,
+                all_peers.len()
+            );
+
+            // Try peers concurrently in batches of 5
+            for chunk in all_peers.chunks(5) {
+                let mut handles = Vec::new();
+                for &peer_addr in chunk {
+                    let info_hash = self.magnet.info_hash;
+                    handles.push(tokio::spawn(async move {
+                        let result =
+                            Self::try_fetch_from_peer_static(peer_addr, info_hash.0, peer_id)
+                                .await;
+                        (peer_addr, result)
+                    }));
+                }
+
+                for handle in handles {
+                    if let Ok((peer_addr, result)) = handle.await {
+                        match result {
+                            Ok(meta) => {
+                                info!("Successfully fetched metadata from {}", peer_addr);
+                                return Ok(meta);
+                            }
+                            Err(e) => {
+                                let err_msg = format!("{}: {}", peer_addr, e);
+                                warn!("Failed to fetch metadata from {}", err_msg);
+                                last_error = err_msg;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        anyhow::bail!("Could not fetch metadata after 3 attempts. Last error: {}", last_error)
+    }
+
+    async fn discover_peers(&self, peer_id: [u8; 20]) -> Vec<std::net::SocketAddr> {
+        let tracker = TrackerClient::new();
         let mut all_peers = Vec::new();
+
         for tr in &self.magnet.trackers {
             info!("Announcing to tracker: {}", tr);
             let res = if tr.starts_with("udp://") {
@@ -112,59 +173,25 @@ impl MagnetWorker {
             }
         }
 
-        if all_peers.is_empty() {
-            anyhow::bail!("No peers found from any tracker");
-        }
-
-        info!("Total peers discovered: {}", all_peers.len());
-
-        // Deduplicate peers
+        // Deduplicate
         all_peers.sort();
         all_peers.dedup();
-
-        let mut last_errors: Vec<String> = Vec::new();
-
-        for peer_addr in &all_peers {
-            info!("Attempting metadata fetch from {}", peer_addr);
-            match self.try_fetch_from_peer(*peer_addr, peer_id).await {
-                Ok(meta) => return Ok(meta),
-                Err(e) => {
-                    let err_msg = format!("{}: {}", peer_addr, e);
-                    warn!("Failed to fetch metadata from {}", err_msg);
-                    last_errors.push(err_msg);
-                }
-            }
-        }
-
-        // Show last 3 errors in the status so user can see what went wrong
-        let error_detail = last_errors
-            .iter()
-            .rev()
-            .take(3)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join("; ");
-
-        anyhow::bail!(
-            "Could not fetch metadata from any of {} peers. Last errors: {}",
-            all_peers.len(),
-            error_detail
-        )
+        all_peers
     }
 
-    async fn try_fetch_from_peer(
-        &self,
+    async fn try_fetch_from_peer_static(
         addr: std::net::SocketAddr,
+        info_hash: [u8; 20],
         our_peer_id: [u8; 20],
     ) -> Result<torrent_core::meta::TorrentMeta, anyhow::Error> {
-        let mut stream = timeout(Duration::from_secs(10), TcpStream::connect(addr)).await??;
+        let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(addr)).await??;
 
-        let handshake = Handshake::new(self.magnet.info_hash.0, our_peer_id);
+        let handshake = Handshake::new(info_hash, our_peer_id);
         stream.write_all(&handshake.serialize()).await?;
 
-        let response_hs = timeout(Duration::from_secs(10), Handshake::read(&mut stream)).await??;
+        let response_hs = timeout(Duration::from_secs(5), Handshake::read(&mut stream)).await??;
 
-        if response_hs.info_hash != self.magnet.info_hash.0 {
+        if response_hs.info_hash != info_hash {
             anyhow::bail!("Info hash mismatch in handshake");
         }
 
@@ -195,7 +222,7 @@ impl MagnetWorker {
 
         for attempt in 0..20 {
             let msg =
-                timeout(Duration::from_secs(10), PeerMessage::read(&mut stream)).await??;
+                timeout(Duration::from_secs(5), PeerMessage::read(&mut stream)).await??;
             match &msg {
                 PeerMessage::Extended { msg_id, payload } if *msg_id == 0 => {
                     let dict = Bencode::decode(payload)?;
@@ -270,7 +297,7 @@ impl MagnetWorker {
             let mut got_piece = false;
             for _ in 0..30 {
                 let msg =
-                    timeout(Duration::from_secs(10), PeerMessage::read(&mut stream))
+                    timeout(Duration::from_secs(5), PeerMessage::read(&mut stream))
                         .await??;
                 if let PeerMessage::Extended { msg_id, payload } = msg {
                     if msg_id == ut_metadata_id {
@@ -314,7 +341,7 @@ impl MagnetWorker {
         let mut hasher = Sha1::new();
         hasher.update(&metadata_bytes);
         let hash = hasher.finalize();
-        if hash[..] != self.magnet.info_hash.0 {
+        if hash[..] != info_hash {
             anyhow::bail!("Metadata hash mismatch!");
         }
 
