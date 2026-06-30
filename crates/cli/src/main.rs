@@ -130,7 +130,11 @@ async fn main() -> anyhow::Result<()> {
                 );
                 println!("{}", "-".repeat(80));
                 for t in list {
-                    let progress_str = format!("{:.1}%", t.progress);
+                    let progress_str = if t.progress > 99.9 && t.progress < 100.0 {
+                        "99.9%".to_string()
+                    } else {
+                        format!("{:.1}%", t.progress)
+                    };
                     let size_mb = format!("{:.1} MB", t.size as f32 / 1_048_576.0);
                     
                     // Truncate name if it's too long to preserve alignment
@@ -158,7 +162,12 @@ async fn main() -> anyhow::Result<()> {
             println!("  Downloaded: {:.1} MB", t.downloaded as f32 / 1_048_576.0);
             println!("  Uploaded:   {:.1} MB", t.uploaded as f32 / 1_048_576.0);
             println!("  Status:     {}", t.status);
-            println!("  Progress:   {:.1}%", t.progress);
+            let progress_str = if t.progress > 99.9 && t.progress < 100.0 {
+                "99.9%".to_string()
+            } else {
+                format!("{:.1}%", t.progress)
+            };
+            println!("  Progress:   {}", progress_str);
             println!("  Down Rate:  {:.1} KB/s", t.download_rate as f32 / 1024.0);
             println!("  Up Rate:    {:.1} KB/s", t.upload_rate as f32 / 1024.0);
             println!("  Peers:      {}", t.peers_connected);
