@@ -13,7 +13,11 @@ impl Handshake {
     pub fn new(info_hash: [u8; 20], peer_id: [u8; 20]) -> Self {
         let mut extensions = [0u8; 8];
         extensions[5] |= 0x10; // BEP 10 extension protocol
-        Self { info_hash, peer_id, extensions }
+        Self {
+            info_hash,
+            peer_id,
+            extensions,
+        }
     }
 
     pub fn serialize(&self) -> Vec<u8> {
@@ -44,7 +48,11 @@ impl Handshake {
         let mut peer_id = [0u8; 20];
         reader.read_exact(&mut peer_id).await?;
 
-        Ok(Self { info_hash, peer_id, extensions: reserved })
+        Ok(Self {
+            info_hash,
+            peer_id,
+            extensions: reserved,
+        })
     }
 }
 
