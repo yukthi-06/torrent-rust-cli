@@ -95,7 +95,7 @@ impl MagnetWorker {
     async fn try_fetch_from_peer(
         &self,
         addr: std::net::SocketAddr,
-        our_peer_id: [0u8; 20],
+        our_peer_id: [u8; 20],
     ) -> Result<torrent_core::meta::TorrentMeta, anyhow::Error> {
         let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(addr)).await??;
 
