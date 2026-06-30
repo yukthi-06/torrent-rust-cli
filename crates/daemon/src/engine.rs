@@ -337,7 +337,10 @@ impl TorrentDownloader {
             FileMode::Single { length } => {
                 let file_path = self.download_dir.join(&self.meta.info.name);
                 if !file_path.exists() {
-                    let file = File::create(file_path)?;
+                    let file = File::create(&file_path)?;
+                    file.set_len(*length)?;
+                } else {
+                    let file = OpenOptions::new().write(true).open(&file_path)?;
                     file.set_len(*length)?;
                 }
             }
@@ -356,7 +359,10 @@ impl TorrentDownloader {
                         std::fs::create_dir_all(p)?;
                     }
                     if !full_path.exists() {
-                        let file = File::create(full_path)?;
+                        let file = File::create(&full_path)?;
+                        file.set_len(f.length)?;
+                    } else {
+                        let file = OpenOptions::new().write(true).open(&full_path)?;
                         file.set_len(f.length)?;
                     }
                 }
