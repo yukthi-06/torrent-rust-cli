@@ -89,12 +89,7 @@ impl MagnetWorker {
                         warn!("UDP tracker {} failed: {}, trying HTTP fallback", tr, e);
                         let http_fallback = tr.replace("udp://", "http://");
                         tracker
-                            .announce_http(
-                                &http_fallback,
-                                self.magnet.info_hash.0,
-                                peer_id,
-                                6881,
-                            )
+                            .announce_http(&http_fallback, self.magnet.info_hash.0, peer_id, 6881)
                             .await
                     }
                 }
@@ -148,14 +143,12 @@ impl MagnetWorker {
         addr: std::net::SocketAddr,
         our_peer_id: [u8; 20],
     ) -> Result<torrent_core::meta::TorrentMeta, anyhow::Error> {
-        let mut stream =
-            timeout(Duration::from_secs(10), TcpStream::connect(addr)).await??;
+        let mut stream = timeout(Duration::from_secs(10), TcpStream::connect(addr)).await??;
 
         let handshake = Handshake::new(self.magnet.info_hash.0, our_peer_id);
         stream.write_all(&handshake.serialize()).await?;
 
-        let response_hs =
-            timeout(Duration::from_secs(10), Handshake::read(&mut stream)).await??;
+        let response_hs = timeout(Duration::from_secs(10), Handshake::read(&mut stream)).await??;
 
         if response_hs.info_hash != self.magnet.info_hash.0 {
             anyhow::bail!("Info hash mismatch in handshake");
@@ -165,7 +158,10 @@ impl MagnetWorker {
             anyhow::bail!("Peer does not support extension protocol");
         }
 
-        info!("Peer {} supports extension protocol, sending extended handshake", addr);
+        info!(
+            "Peer {} supports extension protocol, sending extended handshake",
+            addr
+        );
 
         // Send extended handshake
         let mut m = BTreeMap::new();
@@ -260,20 +256,15 @@ impl MagnetWorker {
                 if let PeerMessage::Extended { msg_id, payload } = msg {
                     if msg_id == ut_metadata_id {
                         let mut offset = 0;
-                        let dict = torrent_core::bencode::Bencode::decode_inner(
-                            &payload,
-                            &mut offset,
-                        );
+                        let dict =
+                            torrent_core::bencode::Bencode::decode_inner(&payload, &mut offset);
                         if let Ok(Bencode::Dict(d)) = dict {
-                            if let Some(Bencode::Int(msg_type)) =
-                                d.get(b"msg_type".as_ref())
-                            {
+                            if let Some(Bencode::Int(msg_type)) = d.get(b"msg_type".as_ref()) {
                                 if *msg_type == 1 {
                                     // data message
                                     let data = &payload[offset..];
                                     let start = i * 16384;
-                                    let end =
-                                        (start + data.len()).min(metadata_size);
+                                    let end = (start + data.len()).min(metadata_size);
                                     metadata_bytes[start..end]
                                         .copy_from_slice(&data[..end - start]);
                                     pieces_received += 1;
@@ -281,10 +272,7 @@ impl MagnetWorker {
                                     break;
                                 } else if *msg_type == 2 {
                                     // reject message
-                                    anyhow::bail!(
-                                        "Peer rejected metadata piece {}",
-                                        i
-                                    );
+                                    anyhow::bail!("Peer rejected metadata piece {}", i);
                                 }
                             }
                         }
@@ -293,11 +281,7 @@ impl MagnetWorker {
                 // Otherwise skip non-extension messages (Have, Bitfield, etc.)
             }
             if !got_piece {
-                anyhow::bail!(
-                    "Timed out waiting for metadata piece {} from {}",
-                    i,
-                    addr
-                );
+                anyhow::bail!("Timed out waiting for metadata piece {} from {}", i, addr);
             }
         }
 
