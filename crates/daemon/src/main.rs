@@ -23,11 +23,8 @@ async fn main() -> anyhow::Result<()> {
     
     tracing_subscriber::fmt()
         .with_ansi(ansi_colors)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("debug")), // default to debug
-        )
-        .with_writer(std::io::stdout.and(file_appender))
+        .with_env_filter(tracing_subscriber::EnvFilter::new("debug"))
+        .with_writer(file_appender)
         .init();
     info!("Starting torrentd background daemon...");
 
