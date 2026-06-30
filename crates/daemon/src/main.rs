@@ -19,7 +19,12 @@ async fn main() -> anyhow::Result<()> {
     // Disable ANSI color codes when stdout is not a terminal (e.g. piped or run as a service)
     let ansi_colors = std::io::IsTerminal::is_terminal(&std::io::stdout());
     
+    let timer = tracing_subscriber::fmt::time::LocalTime::new(
+        time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"),
+    );
+
     tracing_subscriber::fmt()
+        .with_timer(timer)
         .with_ansi(ansi_colors)
         .with_env_filter(tracing_subscriber::EnvFilter::new("debug"))
         .with_writer(file_appender)
