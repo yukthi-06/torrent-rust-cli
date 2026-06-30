@@ -19,8 +19,6 @@ async fn main() -> anyhow::Result<()> {
     // Disable ANSI color codes when stdout is not a terminal (e.g. piped or run as a service)
     let ansi_colors = std::io::IsTerminal::is_terminal(&std::io::stdout());
     
-    use tracing_subscriber::fmt::writer::MakeWriterExt;
-    
     tracing_subscriber::fmt()
         .with_ansi(ansi_colors)
         .with_env_filter(tracing_subscriber::EnvFilter::new("debug"))
