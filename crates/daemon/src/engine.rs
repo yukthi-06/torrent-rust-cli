@@ -257,10 +257,7 @@ impl TorrentDownloader {
                 }
             };
 
-            // Verify it is not all zeros (sparse/empty file)
-            if piece_data.iter().all(|&b| b == 0) && piece_length > 0 {
-                continue;
-            }
+
 
             // SHA1 hash check
             let mut hasher = Sha1::new();
