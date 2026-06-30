@@ -47,9 +47,9 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Background task: flush download progress to disk every 30 seconds
+    // Background task: flush download progress to disk every 5 seconds
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
             tokio::select! {
                 _ = interval.tick() => {
