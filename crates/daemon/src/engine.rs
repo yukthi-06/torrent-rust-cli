@@ -3,7 +3,6 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -22,7 +21,7 @@ pub struct TorrentDownloader {
     pub download_dir: PathBuf,
     pub peer_id: [u8; 20],
     pub state: Arc<Mutex<super::server::TorrentState>>,
-    pub next_piece_to_request: AtomicU32,
+    pub missing_pieces: Arc<Mutex<Vec<u32>>>,
 }
 
 impl TorrentDownloader {
@@ -39,7 +38,7 @@ impl TorrentDownloader {
             download_dir,
             peer_id,
             state,
-            next_piece_to_request: AtomicU32::new(0),
+            missing_pieces: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -59,13 +58,13 @@ impl TorrentDownloader {
             // 2. Verify existing pieces on disk and resume from correct position
             let completed_pieces = self.verify_pieces();
             let total_pieces = self.meta.info.pieces.len() as u32;
-            let first_missing = completed_pieces
+            let missing_list: Vec<u32> = completed_pieces
                 .iter()
-                .position(|&done| !done)
-                .map(|i| i as u32)
-                .unwrap_or(total_pieces);
-
-            self.next_piece_to_request.store(first_missing, Ordering::SeqCst);
+                .enumerate()
+                .filter(|(_, &done)| !done)
+                .map(|(i, _)| i as u32)
+                .collect();
+            *self.missing_pieces.lock().await = missing_list;
 
             let verified_downloaded =
                 completed_pieces
@@ -420,8 +419,51 @@ impl TorrentDownloader {
             .await?;
         stream.write_all(&PeerMessage::Unchoke.serialize()).await?;
 
-        let mut piece_index = self.next_piece_to_request.fetch_add(1, Ordering::SeqCst);
-        let mut block_offset = 0;
+        struct PieceGuard {
+            state: Arc<Mutex<crate::server::TorrentState>>,
+            missing_pieces: Arc<Mutex<Vec<u32>>>,
+            piece_index: u32,
+            block_offset: u32,
+            is_complete: bool,
+        }
+
+        impl Drop for PieceGuard {
+            fn drop(&mut self) {
+                if !self.is_complete {
+                    let piece = self.piece_index;
+                    let downloaded_bytes = self.block_offset;
+                    let state = Arc::clone(&self.state);
+                    let missing = Arc::clone(&self.missing_pieces);
+                    tokio::spawn(async move {
+                        let mut lock = state.lock().await;
+                        lock.downloaded = lock.downloaded.saturating_sub(downloaded_bytes as u64);
+                        if lock.downloaded < lock.size {
+                            lock.status = "Downloading".to_string();
+                        }
+                        missing.lock().await.push(piece);
+                    });
+                }
+            }
+        }
+
+        let mut piece_guard = PieceGuard {
+            state: Arc::clone(&self.state),
+            missing_pieces: Arc::clone(&self.missing_pieces),
+            piece_index: 0,
+            block_offset: 0,
+            is_complete: true,
+        };
+
+        {
+            let mut lock = self.missing_pieces.lock().await;
+            if !lock.is_empty() {
+                piece_guard.piece_index = lock.remove(0);
+                piece_guard.is_complete = false;
+            } else {
+                return Ok(());
+            }
+        }
+
         let piece_length = self.meta.info.piece_length as u32;
         let total_pieces = self.meta.info.pieces.len() as u32;
 
@@ -446,16 +488,14 @@ impl TorrentDownloader {
                     // Peer choked us. Currently we pause requests.
                 }
                 PeerMessage::Unchoke => {
-                    if piece_index < total_pieces {
-                        let req_len = get_request_length(piece_index, block_offset);
-                        if req_len > 0 {
-                            let req = PeerMessage::Request {
-                                index: piece_index,
-                                begin: block_offset,
-                                length: req_len,
-                            };
-                            stream.write_all(&req.serialize()).await?;
-                        }
+                    let req_len = get_request_length(piece_guard.piece_index, piece_guard.block_offset);
+                    if req_len > 0 {
+                        let req = PeerMessage::Request {
+                            index: piece_guard.piece_index,
+                            begin: piece_guard.block_offset,
+                            length: req_len,
+                        };
+                        stream.write_all(&req.serialize()).await?;
                     }
                 }
                 PeerMessage::Piece {
@@ -478,22 +518,36 @@ impl TorrentDownloader {
                     }
 
                     // Advance to next block
-                    block_offset += block.len() as u32;
-                    if block_offset >= piece_length {
-                        block_offset = 0;
-                        piece_index = self.next_piece_to_request.fetch_add(1, Ordering::SeqCst);
+                    piece_guard.block_offset += block.len() as u32;
+                    let is_last_piece = piece_guard.piece_index == total_pieces - 1;
+                    let piece_target_size = if is_last_piece {
+                        let piece_start = piece_guard.piece_index as u64 * piece_length as u64;
+                        (total_size.saturating_sub(piece_start)) as u32
+                    } else {
+                        piece_length
+                    };
+
+                    if piece_guard.block_offset >= piece_target_size {
+                        piece_guard.is_complete = true;
+                        
+                        let mut lock = self.missing_pieces.lock().await;
+                        if !lock.is_empty() {
+                            piece_guard.piece_index = lock.remove(0);
+                            piece_guard.block_offset = 0;
+                            piece_guard.is_complete = false;
+                        } else {
+                            break;
+                        }
                     }
 
-                    if piece_index < total_pieces {
-                        let req_len = get_request_length(piece_index, block_offset);
-                        if req_len > 0 {
-                            let req = PeerMessage::Request {
-                                index: piece_index,
-                                begin: block_offset,
-                                length: req_len,
-                            };
-                            stream.write_all(&req.serialize()).await?;
-                        }
+                    let req_len = get_request_length(piece_guard.piece_index, piece_guard.block_offset);
+                    if req_len > 0 {
+                        let req = PeerMessage::Request {
+                            index: piece_guard.piece_index,
+                            begin: piece_guard.block_offset,
+                            length: req_len,
+                        };
+                        stream.write_all(&req.serialize()).await?;
                     }
                 }
                 _ => {}
