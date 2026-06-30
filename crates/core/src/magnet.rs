@@ -17,6 +17,7 @@ pub enum MagnetError {
 pub struct MagnetLink {
     pub info_hash: InfoHash,
     pub trackers: Vec<String>,
+    pub name: Option<String>,
 }
 
 impl MagnetLink {
@@ -28,6 +29,7 @@ impl MagnetLink {
         let query = &url[8..];
         let mut info_hash = None;
         let mut trackers = Vec::new();
+        let mut name = None;
 
         for pair in query.split('&') {
             if let Some(xt) = pair.strip_prefix("xt=") {
@@ -45,6 +47,10 @@ impl MagnetLink {
                 if let Ok(decoded) = url_decode(tr) {
                     trackers.push(decoded);
                 }
+            } else if let Some(dn) = pair.strip_prefix("dn=") {
+                if let Ok(decoded) = url_decode(dn) {
+                    name = Some(decoded);
+                }
             }
         }
 
@@ -53,6 +59,7 @@ impl MagnetLink {
         Ok(Self {
             info_hash,
             trackers,
+            name,
         })
     }
 }

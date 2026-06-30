@@ -310,9 +310,10 @@ impl RpcServer {
                     }
 
                     let new_id = TorrentId(self.next_id.fetch_add(1, Ordering::SeqCst));
+                    let torrent_name = magnet.name.clone().unwrap_or_else(|| info_hash_str.clone());
                     let torrent_state = Arc::new(Mutex::new(TorrentState {
                         id: new_id,
-                        name: "Magnet Download".to_string(),
+                        name: torrent_name,
                         info_hash: info_hash_str,
                         size: 0,
                         downloaded: 0,

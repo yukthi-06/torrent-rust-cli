@@ -23,9 +23,10 @@ impl TrackerClient {
         // Parse the tracker address.
         // Format of tracker_addr_str: "tracker.coppersurfer.tk:6969"
         // Extract only the host:port portion, discarding any path (e.g. /announce)
-        let host_port = match tracker_addr_str.split('/').next() {
+        let url_stripped = tracker_addr_str.trim_start_matches("udp://");
+        let host_port = match url_stripped.split('/').next() {
             Some(hp) => hp,
-            None => tracker_addr_str,
+            None => url_stripped,
         };
         let addrs: Vec<SocketAddr> = host_port.to_socket_addrs()?.collect();
         if addrs.is_empty() {
