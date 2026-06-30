@@ -176,7 +176,7 @@ impl RpcServer {
             FileMode::Multi { files } => files.iter().map(|f| f.length).sum(),
         };
         let torrent_id = TorrentId(id);
-        let status = "Downloading".to_string();
+        let status = "Checking".to_string();
         let torrent_state = Arc::new(Mutex::new(TorrentState {
             id: torrent_id,
             name: meta.info.name.clone(),
@@ -396,8 +396,8 @@ impl RpcServer {
                         {
                             let mut saved = self.saved_paths.lock().await;
                             saved.insert(new_id.0, path_or_magnet.clone());
-                            let entries: Vec<(u32, String, u64)> =
-                                saved.iter().map(|(k, v)| (*k, v.clone(), 0u64)).collect();
+                            let entries: Vec<(u32, String)> =
+                                saved.iter().map(|(k, v)| (*k, v.clone())).collect();
                             save_state(&entries);
                         }
                         
@@ -426,8 +426,8 @@ impl RpcServer {
                         {
                             let mut saved = self.saved_paths.lock().await;
                             saved.insert(new_id.0, path_or_magnet.clone());
-                            let entries: Vec<(u32, String, u64)> =
-                                saved.iter().map(|(k, v)| (*k, v.clone(), 0u64)).collect();
+                            let entries: Vec<(u32, String)> =
+                                saved.iter().map(|(k, v)| (*k, v.clone())).collect();
                             save_state(&entries);
                         }
 
@@ -494,8 +494,8 @@ impl RpcServer {
                     {
                         let mut saved = self.saved_paths.lock().await;
                         saved.insert(new_id.0, path_or_magnet.clone());
-                        let entries: Vec<(u32, String, u64)> =
-                            saved.iter().map(|(k, v)| (*k, v.clone(), 0u64)).collect();
+                        let entries: Vec<(u32, String)> =
+                            saved.iter().map(|(k, v)| (*k, v.clone())).collect();
                         save_state(&entries);
                     }
                     new_id
@@ -507,7 +507,7 @@ impl RpcServer {
                     info_hash: meta.info_hash.to_string(),
                     size,
                     downloaded: 0,
-                    status: "Downloading".to_string(),
+                    status: "Checking".to_string(),
                     peers_connected: 0,
                 }));
 
