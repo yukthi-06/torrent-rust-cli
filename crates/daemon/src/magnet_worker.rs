@@ -1,4 +1,3 @@
-use crate::engine::TorrentDownloader;
 use crate::server::TorrentState;
 use std::path::PathBuf;
 use std::sync::Arc;
