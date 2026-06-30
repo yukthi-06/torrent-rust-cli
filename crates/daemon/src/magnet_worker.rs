@@ -184,11 +184,14 @@ impl MagnetWorker {
         info_hash: [u8; 20],
         our_peer_id: [u8; 20],
     ) -> Result<torrent_core::meta::TorrentMeta, anyhow::Error> {
+        tracing::debug!("Peer {}: Attempting TCP connect", addr);
         let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(addr)).await??;
 
+        tracing::debug!("Peer {}: TCP connected, sending handshake", addr);
         let handshake = Handshake::new(info_hash, our_peer_id);
         stream.write_all(&handshake.serialize()).await?;
 
+        tracing::debug!("Peer {}: Handshake sent, waiting for response", addr);
         let response_hs = timeout(Duration::from_secs(5), Handshake::read(&mut stream)).await??;
 
         if response_hs.info_hash != info_hash {
@@ -217,6 +220,7 @@ impl MagnetWorker {
         stream.write_all(&ext_msg.serialize()).await?;
 
         // Wait for their extended handshake
+        tracing::debug!("Peer {}: Waiting for their extended handshake", addr);
         let mut ut_metadata_id = None;
         let mut metadata_size = None;
 
@@ -282,6 +286,7 @@ impl MagnetWorker {
         let mut pieces_received = 0;
 
         for i in 0..num_pieces {
+            tracing::debug!("Peer {}: Requesting metadata piece {}", addr, i);
             let mut req = BTreeMap::new();
             req.insert(b"msg_type".to_vec(), Bencode::Int(0));
             req.insert(b"piece".to_vec(), Bencode::Int(i as i64));
@@ -315,6 +320,7 @@ impl MagnetWorker {
                                         .copy_from_slice(&data[..end - start]);
                                     pieces_received += 1;
                                     got_piece = true;
+                                    tracing::debug!("Peer {}: Received metadata piece {}", addr, i);
                                     break;
                                 } else if *msg_type == 2 {
                                     // reject message
