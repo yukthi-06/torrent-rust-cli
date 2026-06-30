@@ -387,180 +387,69 @@ impl RpcServer {
         Ok(())
     }
 
-    async fn process_request(self: &Arc<Self>, request: Request) -> Response {
-        match request {
-            Request::Version => Response::Version {
-                version: format!(
-                    "{} (Git: {} | Date: {})",
-                    env!("CARGO_PKG_VERSION"),
-                    env!("GIT_HASH"),
-                    env!("GIT_DATE")
-                ),
-            },
-            Request::Add { path_or_magnet } => {
-                let mut path_or_magnet = path_or_magnet.trim().to_string();
+    pub async fn add_torrent_internal(self: &Arc<Self>, mut path_or_magnet: String) -> Response {
+        path_or_magnet = path_or_magnet.trim().to_string();
+        
+        // If it's exactly 40 characters of hex, treat it as a bare info hash
+        if path_or_magnet.len() == 40 && path_or_magnet.chars().all(|c| c.is_ascii_hexdigit()) {
+            let mut trackers_str = String::new();
+            for tracker in &self.config.default_trackers {
+                let encoded = url::form_urlencoded::byte_serialize(tracker.as_bytes()).collect::<String>();
+                trackers_str.push_str(&format!("&tr={}", encoded));
+            }
+            path_or_magnet = format!(
+                "magnet:?xt=urn:btih:{}{}",
+                path_or_magnet, trackers_str
+            );
+        }
+
+        if path_or_magnet.to_lowercase().starts_with("magnet:?") {
+            let magnet = match torrent_core::magnet::MagnetLink::parse(&path_or_magnet) {
+                Ok(m) => m,
+                Err(e) => return Response::Error(format!("Invalid magnet link: {}", e)),
+            };
+
+            let info_hash_str = magnet.info_hash.to_string();
+            {
+                let map = self.torrents.lock().await;
+                for existing_handle in map.values() {
+                    let existing = existing_handle.state.lock().await;
+                    if existing.info_hash == info_hash_str {
+                        return Response::Error(format!(
+                            "Torrent '{}' is already added (ID {})",
+                            existing.name, existing.id
+                        ));
+                    }
+                }
+            }
+
+            let cache_path = format!("{}/{}.torrent", self.config.metadata_dir, info_hash_str);
+            if std::path::Path::new(&cache_path).exists() {
+                info!("Found cached metadata for magnet link: {}", info_hash_str);
                 
-                // If it's exactly 40 characters of hex, treat it as a bare info hash
-                if path_or_magnet.len() == 40 && path_or_magnet.chars().all(|c| c.is_ascii_hexdigit()) {
-                    let mut trackers_str = String::new();
-                    for tracker in &self.config.default_trackers {
-                        let encoded = url::form_urlencoded::byte_serialize(tracker.as_bytes()).collect::<String>();
-                        trackers_str.push_str(&format!("&tr={}", encoded));
-                    }
-                    path_or_magnet = format!(
-                        "magnet:?xt=urn:btih:{}{}",
-                        path_or_magnet, trackers_str
-                    );
-                }
-
-                if path_or_magnet.to_lowercase().starts_with("magnet:?") {
-                    let magnet = match torrent_core::magnet::MagnetLink::parse(&path_or_magnet) {
-                        Ok(m) => m,
-                        Err(e) => return Response::Error(format!("Invalid magnet link: {}", e)),
-                    };
-
-                    let info_hash_str = magnet.info_hash.to_string();
-                    {
-                        let map = self.torrents.lock().await;
-                        for existing_handle in map.values() {
-                            let existing = existing_handle.state.lock().await;
-                            if existing.info_hash == info_hash_str {
-                                return Response::Error(format!(
-                                    "Torrent '{}' is already added (ID {})",
-                                    existing.name, existing.id
-                                ));
-                            }
-                        }
-                    }
-
-                    let cache_path = format!("{}/{}.torrent", self.config.metadata_dir, info_hash_str);
-                    if std::path::Path::new(&cache_path).exists() {
-                        info!("Found cached metadata for magnet link: {}", info_hash_str);
-                        
-                        // We must still reserve the ID and persist the ORIGINAL magnet link
-                        let new_id = TorrentId(self.next_id.fetch_add(1, Ordering::SeqCst));
-                        {
-                            let mut saved = self.saved_paths.lock().await;
-                            saved.insert(new_id.0, path_or_magnet.clone());
-                            let entries: Vec<(u32, String)> =
-                                saved.iter().map(|(k, v)| (*k, v.clone())).collect();
-                            save_state(&entries);
-                        }
-                        
-                        // Let the logic fall through to the .torrent handler below using the cache path!
-                        path_or_magnet = cache_path;
-                        
-                    } else {
-                        let new_id = TorrentId(self.next_id.fetch_add(1, Ordering::SeqCst));
-                        let torrent_name = magnet.name.clone().unwrap_or_else(|| info_hash_str.clone());
-                        let torrent_state = Arc::new(Mutex::new(TorrentState {
-                            id: new_id,
-                            name: torrent_name,
-                            info_hash: info_hash_str,
-                            size: 0,
-                            downloaded: 0,
-                            status: "Fetching Metadata".to_string(),
-                            peers_connected: 0,
-                        }));
-
-                        let handle = Arc::new(TorrentHandle {
-                            state: torrent_state,
-                            worker_handle: Mutex::new(None),
-                        });
-                        {
-                            let mut map = self.torrents.lock().await;
-                            map.insert(new_id, Arc::clone(&handle));
-                        }
-
-                        // Persist the original magnet file path so it survives restarts
-                        {
-                            let mut saved = self.saved_paths.lock().await;
-                            saved.insert(new_id.0, path_or_magnet.clone());
-                            let entries: Vec<(u32, String)> =
-                                saved.iter().map(|(k, v)| (*k, v.clone())).collect();
-                            save_state(&entries);
-                        }
-
-                        let download_dir = PathBuf::from(&self.config.download_dir);
-                        let worker = Arc::new(crate::magnet_worker::MagnetWorker {
-                            id: new_id,
-                            magnet,
-                            download_dir,
-                            metadata_dir: PathBuf::from(&self.config.metadata_dir),
-                            state: Arc::clone(&handle.state),
-                        });
-                        let join_handle = tokio::spawn(async move {
-                            worker.start().await;
-                        });
-                        *handle.worker_handle.lock().await = Some(join_handle);
-
-                        return Response::TorrentAdded { id: new_id };
-                    }
-                }
-
-                // Check if it's a .torrent file path
-                let path = std::path::Path::new(&path_or_magnet);
-                let meta = match std::fs::read(path) {
-                    Ok(bytes) => match TorrentMeta::from_bytes(&bytes) {
-                        Ok(m) => m,
-                        Err(e) => {
-                            return Response::Error(format!(
-                                "Failed to parse torrent metainfo: {}",
-                                e
-                            ))
-                        }
-                    },
-                    Err(e) => {
-                        return Response::Error(format!("Failed to read torrent file: {}", e))
-                    }
-                };
-
-                // Compute total size
-                let size = match &meta.info.mode {
-                    FileMode::Single { length } => *length,
-                    FileMode::Multi { files } => files.iter().map(|f| f.length).sum(),
-                };
-
-                // Reject duplicate torrents (same info_hash already loaded)
-                let info_hash_str = meta.info_hash.to_string();
+                // We must still reserve the ID and persist the ORIGINAL magnet link
+                let new_id = TorrentId(self.next_id.fetch_add(1, Ordering::SeqCst));
                 {
-                    let map = self.torrents.lock().await;
-                    for existing_handle in map.values() {
-                        let existing = existing_handle.state.lock().await;
-                        if existing.info_hash == info_hash_str {
-                            return Response::Error(format!(
-                                "Torrent '{}' is already added (ID {})",
-                                existing.name, existing.id
-                            ));
-                        }
-                    }
+                    let mut saved = self.saved_paths.lock().await;
+                    saved.insert(new_id.0, path_or_magnet.clone());
+                    let entries: Vec<(u32, String)> =
+                        saved.iter().map(|(k, v)| (*k, v.clone())).collect();
+                    save_state(&entries);
                 }
-
-                let new_id = if path_or_magnet.starts_with(&format!("{}/", self.config.metadata_dir)) {
-                    // We already allocated an ID above if we fell through from the magnet cache logic
-                    let max_id = self.next_id.load(Ordering::SeqCst) - 1;
-                    TorrentId(max_id)
-                } else {
-                    let new_id = TorrentId(self.next_id.fetch_add(1, Ordering::SeqCst));
-                    
-                    // Only persist if we didn't just persist it in the magnet cache logic
-                    {
-                        let mut saved = self.saved_paths.lock().await;
-                        saved.insert(new_id.0, path_or_magnet.clone());
-                        let entries: Vec<(u32, String)> =
-                            saved.iter().map(|(k, v)| (*k, v.clone())).collect();
-                        save_state(&entries);
-                    }
-                    new_id
-                };
-
+                
+                // Let the logic fall through to the .torrent handler below using the cache path!
+                path_or_magnet = cache_path;
+                
+            } else {
+                let new_id = TorrentId(self.next_id.fetch_add(1, Ordering::SeqCst));
+                let torrent_name = magnet.name.clone().unwrap_or_else(|| info_hash_str.clone());
                 let torrent_state = Arc::new(Mutex::new(TorrentState {
                     id: new_id,
-                    name: meta.info.name.clone(),
-                    info_hash: meta.info_hash.to_string(),
-                    size,
+                    name: torrent_name,
+                    info_hash: info_hash_str,
+                    size: 0,
                     downloaded: 0,
-                    status: "Checking".to_string(),
+                    status: "Fetching Metadata".to_string(),
                     peers_connected: 0,
                 }));
 
@@ -573,14 +462,129 @@ impl RpcServer {
                     map.insert(new_id, Arc::clone(&handle));
                 }
 
-                // Spawn downloader worker via restore_torrent
+                // Persist the original magnet file path so it survives restarts
+                {
+                    let mut saved = self.saved_paths.lock().await;
+                    saved.insert(new_id.0, path_or_magnet.clone());
+                    let entries: Vec<(u32, String)> =
+                        saved.iter().map(|(k, v)| (*k, v.clone())).collect();
+                    save_state(&entries);
+                }
 
-                let server = Arc::clone(self);
-                tokio::spawn(async move {
-                    server.restore_torrent(new_id.0, &path_or_magnet, false).await;
+                let download_dir = PathBuf::from(&self.config.download_dir);
+                let worker = Arc::new(crate::magnet_worker::MagnetWorker {
+                    id: new_id,
+                    magnet,
+                    download_dir,
+                    metadata_dir: PathBuf::from(&self.config.metadata_dir),
+                    state: Arc::clone(&handle.state),
                 });
+                let join_handle = tokio::spawn(async move {
+                    worker.start().await;
+                });
+                *handle.worker_handle.lock().await = Some(join_handle);
 
-                Response::TorrentAdded { id: new_id }
+                return Response::TorrentAdded { id: new_id };
+            }
+        }
+
+        // Check if it's a .torrent file path
+        let path = std::path::Path::new(&path_or_magnet);
+        let meta = match std::fs::read(path) {
+            Ok(bytes) => match TorrentMeta::from_bytes(&bytes) {
+                Ok(m) => m,
+                Err(e) => {
+                    return Response::Error(format!(
+                        "Failed to parse torrent metainfo: {}",
+                        e
+                    ))
+                }
+            },
+            Err(e) => {
+                return Response::Error(format!("Failed to read torrent file: {}", e))
+            }
+        };
+
+        // Compute total size
+        let size = match &meta.info.mode {
+            FileMode::Single { length } => *length,
+            FileMode::Multi { files } => files.iter().map(|f| f.length).sum(),
+        };
+
+        // Reject duplicate torrents (same info_hash already loaded)
+        let info_hash_str = meta.info_hash.to_string();
+        {
+            let map = self.torrents.lock().await;
+            for existing_handle in map.values() {
+                let existing = existing_handle.state.lock().await;
+                if existing.info_hash == info_hash_str {
+                    return Response::Error(format!(
+                        "Torrent '{}' is already added (ID {})",
+                        existing.name, existing.id
+                    ));
+                }
+            }
+        }
+
+        let new_id = if path_or_magnet.starts_with(&format!("{}/", self.config.metadata_dir)) {
+            // We already allocated an ID above if we fell through from the magnet cache logic
+            let max_id = self.next_id.load(Ordering::SeqCst) - 1;
+            TorrentId(max_id)
+        } else {
+            let new_id = TorrentId(self.next_id.fetch_add(1, Ordering::SeqCst));
+            
+            // Only persist if we didn't just persist it in the magnet cache logic
+            {
+                let mut saved = self.saved_paths.lock().await;
+                saved.insert(new_id.0, path_or_magnet.clone());
+                let entries: Vec<(u32, String)> =
+                    saved.iter().map(|(k, v)| (*k, v.clone())).collect();
+                save_state(&entries);
+            }
+            new_id
+        };
+
+        let torrent_state = Arc::new(Mutex::new(TorrentState {
+            id: new_id,
+            name: meta.info.name.clone(),
+            info_hash: meta.info_hash.to_string(),
+            size,
+            downloaded: 0,
+            status: "Checking".to_string(),
+            peers_connected: 0,
+        }));
+
+        let handle = Arc::new(TorrentHandle {
+            state: torrent_state,
+            worker_handle: Mutex::new(None),
+        });
+        {
+            let mut map = self.torrents.lock().await;
+            map.insert(new_id, Arc::clone(&handle));
+        }
+
+        // Spawn downloader worker via restore_torrent
+
+        let server = Arc::clone(self);
+        tokio::spawn(async move {
+            server.restore_torrent(new_id.0, &path_or_magnet, false).await;
+        });
+
+        Response::TorrentAdded { id: new_id }
+    }
+
+    async fn process_request(self: &Arc<Self>, request: Request) -> Response {
+        match request {
+            Request::Version => Response::Version {
+                version: format!(
+                    "{} (Git: {} | Date: {})",
+                    env!("CARGO_PKG_VERSION"),
+                    env!("GIT_HASH"),
+                    env!("GIT_DATE")
+                ),
+            },
+            Request::Add { path_or_magnet } => self.add_torrent_internal(path_or_magnet).await,
+
             }
             Request::List => {
                 let map = self.torrents.lock().await;
@@ -747,6 +751,23 @@ impl RpcServer {
                             Response::Error(format!("Failed to write .torrent file: {}", e))
                         } else {
                             Response::Info(format!("Successfully created {}", out_path))
+                        }
+                    }
+                    Ok(Err(e)) => Response::Error(format!("Failed to create torrent: {}", e)),
+                    Err(e) => Response::Error(format!("Task panicked: {}", e)),
+                }
+            }
+            Request::CreateAdd { path } => {
+                let path_clone = path.clone();
+                match tokio::task::spawn_blocking(move || {
+                    crate::creator::create_torrent(&path_clone, "udp://tracker.opentrackr.org:1337/announce")
+                }).await {
+                    Ok(Ok(bytes)) => {
+                        let out_path = format!("{}.torrent", path);
+                        if let Err(e) = std::fs::write(&out_path, bytes) {
+                            Response::Error(format!("Failed to write .torrent file: {}", e))
+                        } else {
+                            self.add_torrent_internal(out_path).await
                         }
                     }
                     Ok(Err(e)) => Response::Error(format!("Failed to create torrent: {}", e)),

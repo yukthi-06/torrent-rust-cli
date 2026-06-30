@@ -17,6 +17,11 @@ enum Commands {
         /// Path to the file or folder
         path: String,
     },
+    /// Create a .torrent file and immediately add it to the daemon
+    CreateAdd {
+        /// Path to the file or folder
+        path: String,
+    },
     /// Add a new torrent (from .torrent file or magnet link)
     Add {
         /// Path to .torrent file or magnet link
@@ -72,6 +77,7 @@ async fn main() -> anyhow::Result<()> {
     // Map CLI subcommand to RPC Request
     let request = match cli.command {
         Commands::Create { path } => Request::Create { path },
+        Commands::CreateAdd { path } => Request::CreateAdd { path },
         Commands::Add { torrent } => Request::Add {
             path_or_magnet: torrent,
         },

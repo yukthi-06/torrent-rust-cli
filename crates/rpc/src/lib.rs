@@ -8,6 +8,7 @@ pub const PROTOCOL_VERSION: u8 = 1;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Request {
     Create { path: String },
+    CreateAdd { path: String },
     Add { path_or_magnet: String },
     Remove { id: TorrentId, delete_data: bool },
     Pause { id: TorrentId },
