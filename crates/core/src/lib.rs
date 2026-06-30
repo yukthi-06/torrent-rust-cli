@@ -3,6 +3,7 @@ use std::fmt;
 
 pub mod bencode;
 pub mod meta;
+pub mod magnet;
 
 fn to_hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);

@@ -6,17 +6,20 @@ pub const HANDSHAKE_PREFIX: &[u8] = b"\x13BitTorrent protocol";
 pub struct Handshake {
     pub info_hash: [u8; 20],
     pub peer_id: [u8; 20],
+    pub extensions: [u8; 8],
 }
 
 impl Handshake {
     pub fn new(info_hash: [u8; 20], peer_id: [u8; 20]) -> Self {
-        Self { info_hash, peer_id }
+        let mut extensions = [0u8; 8];
+        extensions[5] |= 0x10; // BEP 10 extension protocol
+        Self { info_hash, peer_id, extensions }
     }
 
     pub fn serialize(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(68);
         buf.extend_from_slice(HANDSHAKE_PREFIX);
-        buf.extend_from_slice(&[0u8; 8]); // 8 reserved bytes
+        buf.extend_from_slice(&self.extensions);
         buf.extend_from_slice(&self.info_hash);
         buf.extend_from_slice(&self.peer_id);
         buf
@@ -41,7 +44,7 @@ impl Handshake {
         let mut peer_id = [0u8; 20];
         reader.read_exact(&mut peer_id).await?;
 
-        Ok(Self { info_hash, peer_id })
+        Ok(Self { info_hash, peer_id, extensions: reserved })
     }
 }
 
@@ -70,6 +73,10 @@ pub enum PeerMessage {
         index: u32,
         begin: u32,
         length: u32,
+    },
+    Extended {
+        msg_id: u8,
+        payload: Vec<u8>,
     },
 }
 
@@ -141,6 +148,13 @@ impl PeerMessage {
                 buf.extend_from_slice(&begin.to_be_bytes());
                 buf.extend_from_slice(&length.to_be_bytes());
             }
+            PeerMessage::Extended { msg_id, payload } => {
+                let len = (2 + payload.len()) as u32;
+                buf.extend_from_slice(&len.to_be_bytes());
+                buf.push(20);
+                buf.push(*msg_id);
+                buf.extend_from_slice(payload);
+            }
         }
         buf
     }
@@ -204,6 +218,22 @@ impl PeerMessage {
                     index: u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]),
                     begin: u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]),
                     length: u32::from_be_bytes([buf[8], buf[9], buf[10], buf[11]]),
+                })
+            }
+            20 => {
+                if len < 2 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Extended message too short",
+                    ));
+                }
+                let mut msg_id = [0u8; 1];
+                reader.read_exact(&mut msg_id).await?;
+                let mut payload = vec![0u8; len - 2];
+                reader.read_exact(&mut payload).await?;
+                Ok(PeerMessage::Extended {
+                    msg_id: msg_id[0],
+                    payload,
                 })
             }
             _ => Err(std::io::Error::new(
