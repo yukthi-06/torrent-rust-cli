@@ -374,7 +374,7 @@ impl MagnetWorker {
         let info_dict = Bencode::decode(&metadata_bytes)?;
         let mut root = BTreeMap::new();
         root.insert(b"info".to_vec(), info_dict);
-        root.insert(b"announce".to_vec(), Bencode::String(b"".to_vec())); // Dummy announce so it parses
+        root.insert(b"announce".to_vec(), Bencode::ByteString(b"".to_vec())); // Dummy announce so it parses
 
         let full_meta_bytes = Bencode::Dict(root).encode();
         let meta = torrent_core::meta::TorrentMeta::from_bytes(&full_meta_bytes)?;
