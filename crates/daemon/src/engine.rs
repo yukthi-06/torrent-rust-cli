@@ -461,25 +461,43 @@ impl TorrentDownloader {
                 file.write_all(data)?;
             }
             FileMode::Multi { files } => {
-                // Find which file the absolute_offset falls into
                 let parent_dir = self.download_dir.join(&self.meta.info.name);
                 let mut current_file_start = 0u64;
+                let mut remaining_offset = absolute_offset;
+                let mut data_pos = 0;
+                let data_len = data.len();
+
                 for f in files {
-                    let file_len = f.length;
-                    if absolute_offset >= current_file_start
-                        && absolute_offset < current_file_start + file_len
-                    {
-                        let mut full_path = parent_dir.clone();
-                        for part in &f.path {
-                            full_path.push(part);
-                        }
+                    let file_end = current_file_start + f.length;
+
+                    if remaining_offset >= f.length {
+                        remaining_offset -= f.length;
+                        current_file_start = file_end;
+                        continue;
+                    }
+
+                    let mut full_path = parent_dir.clone();
+                    for part in &f.path {
+                        full_path.push(part);
+                    }
+
+                    if full_path.exists() {
                         let mut file = OpenOptions::new().write(true).open(full_path)?;
-                        let relative_offset = absolute_offset - current_file_start;
-                        file.seek(SeekFrom::Start(relative_offset))?;
-                        file.write_all(data)?;
+                        file.seek(SeekFrom::Start(remaining_offset))?;
+
+                        let available = f.length - remaining_offset;
+                        let to_write = (data_len - data_pos).min(available as usize);
+
+                        file.write_all(&data[data_pos..data_pos + to_write])?;
+                        data_pos += to_write;
+                    }
+
+                    remaining_offset = 0;
+                    current_file_start = file_end;
+
+                    if data_pos >= data_len {
                         break;
                     }
-                    current_file_start += file_len;
                 }
             }
         }
