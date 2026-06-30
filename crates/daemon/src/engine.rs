@@ -257,7 +257,6 @@ impl TorrentDownloader {
                 }
             }
         }
-    }
 
     /// Reads each piece from disk and SHA1-hashes it against the expected piece hash.
     /// Returns a Vec<bool> where true means the piece is complete and verified.
