@@ -3,7 +3,7 @@ use crate::server::TorrentState;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
@@ -12,7 +12,7 @@ use torrent_core::magnet::MagnetLink;
 use torrent_core::TorrentId;
 use torrent_peer::protocol::{Handshake, PeerMessage};
 use torrent_tracker::TrackerClient;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 pub struct MagnetWorker {
     pub id: TorrentId,
@@ -162,7 +162,7 @@ impl MagnetWorker {
             anyhow::bail!("Metadata too large");
         }
 
-        let num_pieces = (metadata_size + 16383) / 16384;
+        let num_pieces = metadata_size.div_ceil(16384);
         let mut metadata_bytes = vec![0u8; metadata_size];
 
         for i in 0..num_pieces {
