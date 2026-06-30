@@ -231,7 +231,7 @@ impl RpcServer {
         let torrents = self.torrents.lock().await;
         let saved = self.saved_paths.lock().await;
         let mut entries: Vec<(u32, String)> = Vec::new();
-        for (&id, handle) in torrents.iter() {
+        for (&id, _handle) in torrents.iter() {
             if let Some(path) = saved.get(&id.0) {
                 entries.push((id.0, path.clone()));
             }
@@ -659,7 +659,7 @@ impl RpcServer {
             Request::Resume { id } => {
                 let map = self.torrents.lock().await;
                 if let Some(handle) = map.get(&id) {
-                    let mut worker_lock = handle.worker_handle.lock().await;
+                    let worker_lock = handle.worker_handle.lock().await;
                     if worker_lock.is_some() {
                         return Response::Error(format!("Torrent ID {} is already running", id));
                     }
