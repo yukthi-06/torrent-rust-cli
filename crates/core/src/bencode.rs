@@ -57,7 +57,7 @@ impl Bencode {
         Self::decode_inner(bytes, &mut offset)
     }
 
-    fn decode_inner(bytes: &[u8], offset: &mut usize) -> Result<Self, BencodeError> {
+    pub fn decode_inner(bytes: &[u8], offset: &mut usize) -> Result<Self, BencodeError> {
         if *offset >= bytes.len() {
             return Err(BencodeError::UnexpectedEOF);
         }
