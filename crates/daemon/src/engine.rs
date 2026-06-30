@@ -388,7 +388,9 @@ impl TorrentDownloader {
         let handshake = Handshake::new(self.meta.info_hash.0, self.peer_id);
         stream.write_all(&handshake.serialize()).await?;
 
-        let server_handshake = Handshake::read(stream).await?;
+        let server_handshake = timeout(Duration::from_secs(10), Handshake::read(stream))
+            .await
+            .map_err(|_| anyhow::anyhow!("Handshake timed out"))??;
         if server_handshake.info_hash != self.meta.info_hash.0 {
             anyhow::bail!("Info hash mismatch");
         }
@@ -483,7 +485,9 @@ impl TorrentDownloader {
 
         // Simple download loop from peer
         loop {
-            let msg = PeerMessage::read(stream).await?;
+            let msg = timeout(Duration::from_secs(15), PeerMessage::read(stream))
+                .await
+                .map_err(|_| anyhow::anyhow!("Peer read timed out"))??;
             match msg {
                 PeerMessage::KeepAlive => {}
                 PeerMessage::Choke => {
