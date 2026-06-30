@@ -34,3 +34,4 @@ google-services.json
 *.hprof
 *.apk 
 app/build/
+target
