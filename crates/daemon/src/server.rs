@@ -600,8 +600,8 @@ impl RpcServer {
                     // Remove from persisted state
                     let mut saved = self.saved_paths.lock().await;
                     saved.remove(&id.0);
-                    let entries: Vec<(u32, String, u64)> =
-                        saved.iter().map(|(k, v)| (*k, v.clone(), 0u64)).collect();
+                    let entries: Vec<(u32, String)> =
+                        saved.iter().map(|(k, v)| (*k, v.clone())).collect();
                     save_state(&entries);
                     Response::TorrentRemoved
                 } else {
