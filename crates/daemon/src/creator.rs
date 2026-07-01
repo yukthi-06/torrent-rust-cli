@@ -23,7 +23,7 @@ fn visit_dirs(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn create_torrent(path_str: &str, announce: &str) -> Result<Vec<u8>> {
+pub fn create_torrent(path_str: &str, trackers: Vec<String>) -> Result<Vec<u8>> {
     let path = Path::new(path_str);
     if !path.exists() {
         return Err(anyhow::anyhow!("Path does not exist: {}", path_str));
@@ -123,9 +123,20 @@ pub fn create_torrent(path_str: &str, announce: &str) -> Result<Vec<u8>> {
     let mut info_hash_arr = [0u8; 20];
     info_hash_arr.copy_from_slice(&info_hasher.finalize());
 
+    let announce = trackers
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "udp://tracker.opentrackr.org:1337/announce".to_string());
+
+    let announce_list = if trackers.len() > 1 {
+        Some(trackers.into_iter().map(|t| vec![t]).collect())
+    } else {
+        None
+    };
+
     let meta = TorrentMeta {
-        announce: announce.to_string(),
-        announce_list: None,
+        announce,
+        announce_list,
         info,
         info_hash: InfoHash(info_hash_arr),
     };

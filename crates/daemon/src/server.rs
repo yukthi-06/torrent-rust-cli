@@ -779,8 +779,12 @@ impl RpcServer {
             }
             Request::Create { path } => {
                 let path_clone = path.clone();
+                let trackers = std::fs::read_to_string("crates/trackers.txt")
+                    .or_else(|_| std::fs::read_to_string("trackers.txt"))
+                    .map(|s| s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+                    .unwrap_or_else(|_| vec!["udp://tracker.opentrackr.org:1337/announce".to_string()]);
                 match tokio::task::spawn_blocking(move || {
-                    crate::creator::create_torrent(&path_clone, "udp://tracker.opentrackr.org:1337/announce")
+                    crate::creator::create_torrent(&path_clone, trackers)
                 }).await {
                     Ok(Ok(bytes)) => {
                         let out_path = format!("{}.torrent", path);
@@ -797,8 +801,12 @@ impl RpcServer {
             Request::CreateAdd { path } => {
                 let path_clone = path.clone();
                 let parent_dir = std::path::Path::new(&path).parent().map(|p| p.to_path_buf());
+                let trackers = std::fs::read_to_string("crates/trackers.txt")
+                    .or_else(|_| std::fs::read_to_string("trackers.txt"))
+                    .map(|s| s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+                    .unwrap_or_else(|_| vec!["udp://tracker.opentrackr.org:1337/announce".to_string()]);
                 match tokio::task::spawn_blocking(move || {
-                    crate::creator::create_torrent(&path_clone, "udp://tracker.opentrackr.org:1337/announce")
+                    crate::creator::create_torrent(&path_clone, trackers)
                 }).await {
                     Ok(Ok(bytes)) => {
                         let out_path = format!("{}.torrent", path);
