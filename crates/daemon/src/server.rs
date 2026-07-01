@@ -708,8 +708,8 @@ impl RpcServer {
         let mut display = t.status.clone();
         if display != "Checking" && display != "Paused" && display != "Fetching Metadata" {
             let now = std::time::Instant::now();
-            let is_up = t.last_upload_time.map_or(false, |dt| now.duration_since(dt).as_secs() < 3);
-            let is_down = t.last_download_time.map_or(false, |dt| now.duration_since(dt).as_secs() < 3);
+            let is_up = t.last_upload_time.is_some_and(|dt| now.duration_since(dt).as_secs() < 3);
+            let is_down = t.last_download_time.is_some_and(|dt| now.duration_since(dt).as_secs() < 3);
             if is_up && is_down {
                 display = "Up/Down".to_string();
             } else if is_up {
