@@ -584,8 +584,6 @@ impl RpcServer {
                 ),
             },
             Request::Add { path_or_magnet } => self.add_torrent_internal(path_or_magnet).await,
-
-            }
             Request::List => {
                 let map = self.torrents.lock().await;
                 let mut list = Vec::new();
