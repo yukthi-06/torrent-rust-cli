@@ -629,9 +629,11 @@ impl TorrentDownloader {
                             }
                         }
                         PeerMessage::Interested => {
+                            tracing::info!("Remote peer is interested in our pieces. Unchoking them...");
                             writer.write_all(&PeerMessage::Unchoke.serialize()).await?;
                         }
                         PeerMessage::Request { index, begin, length } => {
+                            tracing::info!("Received Request from peer for piece {} (offset {}, len {})", index, begin, length);
                             let has = {
                                 let lock = self.have_pieces.lock().await;
                                 lock.get(index as usize).copied().unwrap_or(false)
@@ -644,9 +646,14 @@ impl TorrentDownloader {
                                         begin,
                                         block: data
                                     }.serialize()).await?;
+                                    tracing::info!("Successfully served piece {} block to peer!", index);
                                     let mut lock = self.state.lock().await;
                                     lock.uploaded += length as u64;
+                                } else {
+                                    tracing::warn!("Failed to read piece {} from disk despite having it marked as complete!", index);
                                 }
+                            } else {
+                                tracing::warn!("Peer requested piece {} which we do not have!", index);
                             }
                         }
                         _ => {}
