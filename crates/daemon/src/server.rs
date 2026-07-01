@@ -779,6 +779,11 @@ impl RpcServer {
             }
             Request::Create { path, trackers } => {
                 let path_clone = path.clone();
+                if let Some(ref t) = trackers {
+                    tracing::debug!("RPC Request::Create received with {} trackers.", t.len());
+                } else {
+                    tracing::warn!("RPC Request::Create received with NO trackers! Using default fallback.");
+                }
                 let trackers = trackers.unwrap_or_else(|| vec!["udp://tracker.opentrackr.org:1337/announce".to_string()]);
                 match tokio::task::spawn_blocking(move || {
                     crate::creator::create_torrent(&path_clone, trackers)
@@ -798,6 +803,11 @@ impl RpcServer {
             Request::CreateAdd { path, trackers } => {
                 let path_clone = path.clone();
                 let parent_dir = std::path::Path::new(&path).parent().map(|p| p.to_path_buf());
+                if let Some(ref t) = trackers {
+                    tracing::debug!("RPC Request::CreateAdd received with {} trackers.", t.len());
+                } else {
+                    tracing::warn!("RPC Request::CreateAdd received with NO trackers! Using default fallback.");
+                }
                 let trackers = trackers.unwrap_or_else(|| vec!["udp://tracker.opentrackr.org:1337/announce".to_string()]);
                 match tokio::task::spawn_blocking(move || {
                     crate::creator::create_torrent(&path_clone, trackers)

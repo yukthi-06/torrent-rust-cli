@@ -5,6 +5,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use torrent_core::meta::{FileMode, InfoDict, TorrentFile, TorrentMeta};
 use torrent_core::InfoHash;
+use tracing::debug;
 
 pub const DEFAULT_PIECE_LENGTH: u64 = 524288; // 512KB
 
@@ -123,7 +124,7 @@ pub fn create_torrent(path_str: &str, trackers: Vec<String>) -> Result<Vec<u8>> 
     let mut info_hash_arr = [0u8; 20];
     info_hash_arr.copy_from_slice(&info_hasher.finalize());
 
-    println!("[DEBUG] Daemon create_torrent called with {} trackers", trackers.len());
+    debug!("Daemon create_torrent called with {} trackers", trackers.len());
 
     let announce = trackers
         .first()
@@ -132,10 +133,10 @@ pub fn create_torrent(path_str: &str, trackers: Vec<String>) -> Result<Vec<u8>> 
 
     let announce_list = if trackers.len() > 1 {
         let list: Vec<Vec<String>> = trackers.into_iter().map(|t| vec![t]).collect();
-        println!("[DEBUG] Generating announce-list with {} tiers", list.len());
+        debug!("Generating announce-list with {} tiers", list.len());
         Some(list)
     } else {
-        println!("[DEBUG] Skipping announce-list because trackers count is <= 1");
+        debug!("Skipping announce-list because trackers count is <= 1");
         None
     };
 
