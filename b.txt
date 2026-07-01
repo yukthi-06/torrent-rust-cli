@@ -1,0 +1,8 @@
+set PATH=%PATH%;C:\Users\ShibuPC\.cargo\bin\
+set PATH=%PATH%;D:\Programs_Portable_GIT\GitPortable\usr\bin\
+set PATH=%PATH%;C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx86\x64\
+set PATH=%PATH%;C:\Users\ShibuPC\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin\
+
+C:\Users\ShibuPC\.cargo\bin\rustup.exe toolchain install stable-x86_64-pc-windows-gnu
+rustup default stable-x86_64-pc-windows-gnu
+

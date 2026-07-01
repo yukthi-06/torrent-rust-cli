@@ -152,6 +152,7 @@ impl RpcServer {
                     info_hash: info_hash_str,
                     size: 0,
                     downloaded: 0,
+                    uploaded: 0,
                     status: "Fetching Metadata".to_string(),
                     peers_connected: 0,
                 }));
@@ -222,6 +223,7 @@ impl RpcServer {
             info_hash: meta.info_hash.to_string(),
             size,
             downloaded: 0,
+            uploaded: 0,
             status,
             peers_connected: 0,
         }));
@@ -557,6 +559,7 @@ impl RpcServer {
                     info_hash: info_hash_str,
                     size: 0,
                     downloaded: 0,
+                    uploaded: 0,
                     status: "Fetching Metadata".to_string(),
                     peers_connected: 0,
                 }));
@@ -665,6 +668,7 @@ impl RpcServer {
             info_hash: meta.info_hash.to_string(),
             size,
             downloaded: 0,
+            uploaded: 0,
             status: "Checking".to_string(),
             peers_connected: 0,
         }));

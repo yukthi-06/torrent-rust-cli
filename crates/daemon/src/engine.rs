@@ -34,6 +34,7 @@ impl TorrentDownloader {
         peer_id: [u8; 20],
         state: Arc<Mutex<super::server::TorrentState>>,
     ) -> Self {
+        let have_pieces = Arc::new(Mutex::new(vec![false; meta.info.pieces.len()]));
         Self {
             id,
             meta,
@@ -41,7 +42,7 @@ impl TorrentDownloader {
             peer_id,
             state,
             missing_pieces: Arc::new(Mutex::new(Vec::new())),
-            have_pieces: Arc::new(Mutex::new(vec![false; meta.info.pieces.len()])),
+            have_pieces,
             piece_broadcaster: tokio::sync::broadcast::channel(100).0,
         }
     }
@@ -416,7 +417,7 @@ impl TorrentDownloader {
     pub async fn handle_incoming_peer(
         self: &Arc<Self>,
         mut stream: TcpStream,
-        handshake: Handshake,
+        _handshake: Handshake,
     ) -> Result<(), anyhow::Error> {
         let our_handshake = Handshake::new(self.meta.info_hash.0, self.peer_id);
         stream.write_all(&our_handshake.serialize()).await?;
