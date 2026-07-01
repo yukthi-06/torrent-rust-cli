@@ -7,8 +7,8 @@ pub const PROTOCOL_VERSION: u8 = 1;
 /// RPC request commands sent from CLI to Daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Request {
-    Create { path: String },
-    CreateAdd { path: String },
+    Create { path: String, trackers: Option<Vec<String>> },
+    CreateAdd { path: String, trackers: Option<Vec<String>> },
     Add { path_or_magnet: String },
     Remove { id: TorrentId, delete_data: bool },
     Pause { id: TorrentId },

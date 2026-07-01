@@ -76,8 +76,20 @@ async fn main() -> anyhow::Result<()> {
 
     // Map CLI subcommand to RPC Request
     let request = match cli.command {
-        Commands::Create { path } => Request::Create { path },
-        Commands::CreateAdd { path } => Request::CreateAdd { path },
+        Commands::Create { path } => {
+            let trackers = std::fs::read_to_string("trackers.txt")
+                .or_else(|_| std::fs::read_to_string("crates/trackers.txt"))
+                .map(|s| s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+                .ok();
+            Request::Create { path, trackers }
+        }
+        Commands::CreateAdd { path } => {
+            let trackers = std::fs::read_to_string("trackers.txt")
+                .or_else(|_| std::fs::read_to_string("crates/trackers.txt"))
+                .map(|s| s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+                .ok();
+            Request::CreateAdd { path, trackers }
+        }
         Commands::Add { torrent } => Request::Add {
             path_or_magnet: torrent,
         },
