@@ -473,7 +473,7 @@ impl TorrentDownloader {
         // Send Bitfield
         let bitfield = {
             let have = self.have_pieces.lock().await;
-            let mut bitfield_bytes = vec![0u8; (have.len() + 7) / 8];
+            let mut bitfield_bytes = vec![0u8; have.len().div_ceil(8)];
             for (i, &has_piece) in have.iter().enumerate() {
                 if has_piece {
                     bitfield_bytes[i / 8] |= 1 << (7 - (i % 8));
