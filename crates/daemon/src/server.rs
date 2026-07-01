@@ -1,4 +1,5 @@
 use crate::engine;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -18,17 +19,37 @@ fn state_file_path() -> PathBuf {
     PathBuf::from("torrents.json")
 }
 
-/// Loads saved torrent state from disk. Returns (id, path).
-fn load_state() -> Vec<(u32, String)> {
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SavedTorrent {
+    pub id: u32,
+    pub path: String,
+    pub download_dir: Option<String>,
+}
+
+/// Loads saved torrent state from disk. Returns Vec<SavedTorrent>.
+fn load_state() -> Vec<SavedTorrent> {
     let path = state_file_path();
     match std::fs::read_to_string(&path) {
-        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+        Ok(contents) => {
+            if let Ok(new_format) = serde_json::from_str::<Vec<SavedTorrent>>(&contents) {
+                new_format
+            } else if let Ok(old_format) = serde_json::from_str::<Vec<(u32, String)>>(&contents) {
+                // Migrate old format
+                old_format.into_iter().map(|(id, path)| SavedTorrent {
+                    id,
+                    path,
+                    download_dir: None,
+                }).collect()
+            } else {
+                Vec::new()
+            }
+        }
         Err(_) => Vec::new(),
     }
 }
 
-/// Persists the current list of torrent (id, path) tuples to disk.
-fn save_state(entries: &[(u32, String)]) {
+/// Persists the current list of SavedTorrent structs to disk.
+fn save_state(entries: &[SavedTorrent]) {
     let path = state_file_path();
     match serde_json::to_string_pretty(entries) {
         Ok(json) => {
@@ -58,8 +79,8 @@ pub struct TorrentHandle {
 pub struct RpcServer {
     config: Arc<torrent_config::Config>,
     torrents: Mutex<HashMap<TorrentId, Arc<TorrentHandle>>>,
-    /// Tracks (id, torrent_file_path) for persistence
-    saved_paths: Mutex<HashMap<u32, String>>,
+    /// Tracks id to SavedTorrent for persistence
+    saved_paths: Mutex<HashMap<u32, SavedTorrent>>,
     next_id: AtomicU32,
 }
 
@@ -81,11 +102,11 @@ impl RpcServer {
         }
         info!("Restoring {} torrent(s) from saved state...", entries.len());
         let mut max_id = 0u32;
-        for (id, path) in &entries {
-            max_id = max_id.max(*id);
+        for entry in &entries {
+            max_id = max_id.max(entry.id);
             let server = Arc::clone(&self);
-            let path = path.clone();
-            let id = *id;
+            let path = entry.path.clone();
+            let id = entry.id;
             tokio::spawn(async move {
                 server.restore_torrent(id, &path, false).await;
             });
@@ -96,8 +117,8 @@ impl RpcServer {
             self.next_id.store(max_id + 1, Ordering::SeqCst);
         }
         let mut saved = self.saved_paths.lock().await;
-        for (id, path) in entries {
-            saved.insert(id, path);
+        for entry in entries {
+            saved.insert(entry.id, entry);
         }
     }
 
@@ -142,7 +163,11 @@ impl RpcServer {
                     map.insert(torrent_id, Arc::clone(&handle));
                 }
 
-                let download_dir = PathBuf::from(&self.config.download_dir);
+                let custom_dir = {
+                    let saved = self.saved_paths.lock().await;
+                    saved.get(&id).and_then(|t| t.download_dir.clone())
+                };
+                let download_dir = custom_dir.map(PathBuf::from).unwrap_or_else(|| PathBuf::from(&self.config.download_dir));
                 let worker = Arc::new(crate::magnet_worker::MagnetWorker {
                     id: torrent_id,
                     magnet,
@@ -205,7 +230,11 @@ impl RpcServer {
             let mut map = self.torrents.lock().await;
             map.insert(torrent_id, Arc::clone(&handle));
         }
-        let download_dir = PathBuf::from(&self.config.download_dir);
+        let custom_dir = {
+            let saved = self.saved_paths.lock().await;
+            saved.get(&id).and_then(|t| t.download_dir.clone())
+        };
+        let download_dir = custom_dir.map(PathBuf::from).unwrap_or_else(|| PathBuf::from(&self.config.download_dir));
         let mut peer_id = [0u8; 20];
         peer_id[0..8].copy_from_slice(b"-AG0001-");
         let downloader = Arc::new(engine::TorrentDownloader::new(
@@ -257,10 +286,10 @@ impl RpcServer {
     pub async fn flush_progress(&self) {
         let torrents = self.torrents.lock().await;
         let saved = self.saved_paths.lock().await;
-        let mut entries: Vec<(u32, String)> = Vec::new();
+        let mut entries: Vec<SavedTorrent> = Vec::new();
         for (&id, _handle) in torrents.iter() {
-            if let Some(path) = saved.get(&id.0) {
-                entries.push((id.0, path.clone()));
+            if let Some(entry) = saved.get(&id.0) {
+                entries.push(entry.clone());
             }
         }
         if !entries.is_empty() {
@@ -387,7 +416,7 @@ impl RpcServer {
         Ok(())
     }
 
-    pub async fn add_torrent_internal(self: &Arc<Self>, mut path_or_magnet: String) -> Response {
+    pub async fn add_torrent_internal(self: &Arc<Self>, mut path_or_magnet: String, custom_download_dir: Option<PathBuf>) -> Response {
         path_or_magnet = path_or_magnet.trim().to_string();
         
         // If it's exactly 40 characters of hex, treat it as a bare info hash
@@ -431,9 +460,12 @@ impl RpcServer {
                 let new_id = TorrentId(self.next_id.fetch_add(1, Ordering::SeqCst));
                 {
                     let mut saved = self.saved_paths.lock().await;
-                    saved.insert(new_id.0, path_or_magnet.clone());
-                    let entries: Vec<(u32, String)> =
-                        saved.iter().map(|(k, v)| (*k, v.clone())).collect();
+                    saved.insert(new_id.0, SavedTorrent {
+                        id: new_id.0,
+                        path: path_or_magnet.clone(),
+                        download_dir: custom_download_dir.as_ref().map(|p| p.to_string_lossy().to_string()),
+                    });
+                    let entries: Vec<SavedTorrent> = saved.values().cloned().collect();
                     save_state(&entries);
                 }
                 
@@ -465,9 +497,12 @@ impl RpcServer {
                 // Persist the original magnet file path so it survives restarts
                 {
                     let mut saved = self.saved_paths.lock().await;
-                    saved.insert(new_id.0, path_or_magnet.clone());
-                    let entries: Vec<(u32, String)> =
-                        saved.iter().map(|(k, v)| (*k, v.clone())).collect();
+                    saved.insert(new_id.0, SavedTorrent {
+                        id: new_id.0,
+                        path: path_or_magnet.clone(),
+                        download_dir: custom_download_dir.as_ref().map(|p| p.to_string_lossy().to_string()),
+                    });
+                    let entries: Vec<SavedTorrent> = saved.values().cloned().collect();
                     save_state(&entries);
                 }
 
@@ -536,9 +571,12 @@ impl RpcServer {
             // Only persist if we didn't just persist it in the magnet cache logic
             {
                 let mut saved = self.saved_paths.lock().await;
-                saved.insert(new_id.0, path_or_magnet.clone());
-                let entries: Vec<(u32, String)> =
-                    saved.iter().map(|(k, v)| (*k, v.clone())).collect();
+                saved.insert(new_id.0, SavedTorrent {
+                    id: new_id.0,
+                    path: path_or_magnet.clone(),
+                    download_dir: custom_download_dir.as_ref().map(|p| p.to_string_lossy().to_string()),
+                });
+                let entries: Vec<SavedTorrent> = saved.values().cloned().collect();
                 save_state(&entries);
             }
             new_id
@@ -583,7 +621,7 @@ impl RpcServer {
                     env!("GIT_DATE")
                 ),
             },
-            Request::Add { path_or_magnet } => self.add_torrent_internal(path_or_magnet).await,
+            Request::Add { path_or_magnet } => self.add_torrent_internal(path_or_magnet, None).await,
             Request::List => {
                 let map = self.torrents.lock().await;
                 let mut list = Vec::new();
@@ -654,8 +692,7 @@ impl RpcServer {
                     }
                     let mut saved = self.saved_paths.lock().await;
                     saved.remove(&id.0);
-                    let entries: Vec<(u32, String)> =
-                        saved.iter().map(|(k, v)| (*k, v.clone())).collect();
+                    let entries: Vec<SavedTorrent> = saved.values().cloned().collect();
                     save_state(&entries);
                     Response::TorrentRemoved
                 } else {
@@ -685,12 +722,13 @@ impl RpcServer {
                     let mut t = handle.state.lock().await;
                     t.status = "Checking".to_string();
                     
-                    let path = {
+                    let entry = {
                         let saved = self.saved_paths.lock().await;
                         saved.get(&id.0).cloned()
                     };
                     
-                    if let Some(p) = path {
+                    if let Some(e) = entry {
+                        let p = e.path;
                         // Drop locks before spawning to avoid deadlocks
                         drop(t);
                         drop(worker_lock);
@@ -716,12 +754,13 @@ impl RpcServer {
                     let mut t = handle.state.lock().await;
                     t.status = "Checking".to_string();
                     
-                    let path = {
+                    let entry = {
                         let saved = self.saved_paths.lock().await;
                         saved.get(&id.0).cloned()
                     };
                     
-                    if let Some(p) = path {
+                    if let Some(e) = entry {
+                        let p = e.path;
                         drop(t);
                         drop(map);
                         let server = Arc::clone(self);
@@ -757,6 +796,7 @@ impl RpcServer {
             }
             Request::CreateAdd { path } => {
                 let path_clone = path.clone();
+                let parent_dir = std::path::Path::new(&path).parent().map(|p| p.to_path_buf());
                 match tokio::task::spawn_blocking(move || {
                     crate::creator::create_torrent(&path_clone, "udp://tracker.opentrackr.org:1337/announce")
                 }).await {
@@ -765,7 +805,7 @@ impl RpcServer {
                         if let Err(e) = std::fs::write(&out_path, bytes) {
                             Response::Error(format!("Failed to write .torrent file: {}", e))
                         } else {
-                            self.add_torrent_internal(out_path).await
+                            self.add_torrent_internal(out_path, parent_dir).await
                         }
                     }
                     Ok(Err(e)) => Response::Error(format!("Failed to create torrent: {}", e)),
