@@ -123,14 +123,19 @@ pub fn create_torrent(path_str: &str, trackers: Vec<String>) -> Result<Vec<u8>> 
     let mut info_hash_arr = [0u8; 20];
     info_hash_arr.copy_from_slice(&info_hasher.finalize());
 
+    println!("[DEBUG] Daemon create_torrent called with {} trackers", trackers.len());
+
     let announce = trackers
         .first()
         .cloned()
         .unwrap_or_else(|| "udp://tracker.opentrackr.org:1337/announce".to_string());
 
     let announce_list = if trackers.len() > 1 {
-        Some(trackers.into_iter().map(|t| vec![t]).collect())
+        let list: Vec<Vec<String>> = trackers.into_iter().map(|t| vec![t]).collect();
+        println!("[DEBUG] Generating announce-list with {} tiers", list.len());
+        Some(list)
     } else {
+        println!("[DEBUG] Skipping announce-list because trackers count is <= 1");
         None
     };
 

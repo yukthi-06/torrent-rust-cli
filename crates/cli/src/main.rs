@@ -77,17 +77,31 @@ async fn main() -> anyhow::Result<()> {
     // Map CLI subcommand to RPC Request
     let request = match cli.command {
         Commands::Create { path } => {
-            let trackers = std::fs::read_to_string("trackers.txt")
-                .or_else(|_| std::fs::read_to_string("crates/trackers.txt"))
-                .map(|s| s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
-                .ok();
+            let trackers = match std::fs::read_to_string("trackers.txt").or_else(|_| std::fs::read_to_string("crates/trackers.txt")) {
+                Ok(content) => {
+                    let lines: Vec<String> = content.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+                    println!("[DEBUG] CLI successfully loaded {} trackers from file.", lines.len());
+                    Some(lines)
+                }
+                Err(e) => {
+                    println!("[DEBUG] CLI failed to read trackers.txt: {}", e);
+                    None
+                }
+            };
             Request::Create { path, trackers }
         }
         Commands::CreateAdd { path } => {
-            let trackers = std::fs::read_to_string("trackers.txt")
-                .or_else(|_| std::fs::read_to_string("crates/trackers.txt"))
-                .map(|s| s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
-                .ok();
+            let trackers = match std::fs::read_to_string("trackers.txt").or_else(|_| std::fs::read_to_string("crates/trackers.txt")) {
+                Ok(content) => {
+                    let lines: Vec<String> = content.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+                    println!("[DEBUG] CLI successfully loaded {} trackers from file.", lines.len());
+                    Some(lines)
+                }
+                Err(e) => {
+                    println!("[DEBUG] CLI failed to read trackers.txt: {}", e);
+                    None
+                }
+            };
             Request::CreateAdd { path, trackers }
         }
         Commands::Add { torrent } => Request::Add {
