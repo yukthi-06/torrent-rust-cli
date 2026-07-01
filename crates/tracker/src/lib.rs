@@ -19,6 +19,7 @@ impl TrackerClient {
         info_hash: [u8; 20],
         peer_id: [u8; 20],
         port: u16,
+        left: i64,
     ) -> Result<Vec<SocketAddr>, anyhow::Error> {
         // Parse the tracker address.
         // Format of tracker_addr_str: "tracker.coppersurfer.tk:6969"
@@ -78,7 +79,7 @@ impl TrackerClient {
         announce_req.extend_from_slice(&info_hash);
         announce_req.extend_from_slice(&peer_id);
         announce_req.extend_from_slice(&0i64.to_be_bytes()); // downloaded
-        announce_req.extend_from_slice(&i64::MAX.to_be_bytes()); // left (unknown)
+        announce_req.extend_from_slice(&left.to_be_bytes()); // left
         announce_req.extend_from_slice(&0i64.to_be_bytes()); // uploaded
         announce_req.extend_from_slice(&0u32.to_be_bytes()); // event: none (0)
         announce_req.extend_from_slice(&0u32.to_be_bytes()); // ip address: default (0)
@@ -129,6 +130,7 @@ impl TrackerClient {
         info_hash: [u8; 20],
         peer_id: [u8; 20],
         port: u16,
+        left: i64,
     ) -> Result<Vec<SocketAddr>, anyhow::Error> {
         // Strip prefix
         let url_stripped = tracker_url.trim_start_matches("http://");
@@ -172,10 +174,10 @@ impl TrackerClient {
 
         // Construct request
         let req_str = format!(
-            "GET {}?info_hash={}&peer_id={}&port={}&downloaded=0&uploaded=0&left=0&compact=1 HTTP/1.1\r\n\
+            "GET {}?info_hash={}&peer_id={}&port={}&downloaded=0&uploaded=0&left={}&compact=1 HTTP/1.1\r\n\
              Host: {}\r\n\
              Connection: close\r\n\r\n",
-            path, info_hash_encoded, peer_id_encoded, port, host_port
+            path, info_hash_encoded, peer_id_encoded, port, left, host_port
         );
 
         stream.write_all(req_str.as_bytes()).await?;

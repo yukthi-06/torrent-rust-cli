@@ -54,10 +54,8 @@ impl TorrentDownloader {
         );
 
         match self.verify_and_resume().await {
-            Ok((verified, total)) => {
-                if verified < total {
-                    self.start_announce_loop().await;
-                }
+            Ok((_verified, _total)) => {
+                self.start_announce_loop().await;
             }
             Err(e) => {
                 error!("Failed to initialize/verify torrent {}: {}", self.id, e);
@@ -161,6 +159,11 @@ impl TorrentDownloader {
                     }
                 }
 
+                let left = {
+                    let s = self.state.lock().await;
+                    (s.size - s.downloaded) as i64
+                };
+
                 let mut peers = Vec::new();
                 for tracker_url in &trackers {
                     let tracker = TrackerClient::new();
@@ -168,7 +171,7 @@ impl TorrentDownloader {
                         let host_port = tracker_url.trim_start_matches("udp://");
                         info!("Trying UDP tracker: {}", tracker_url);
                         match tracker
-                            .announce_udp(host_port, self.meta.info_hash.0, self.peer_id, 6881)
+                            .announce_udp(host_port, self.meta.info_hash.0, self.peer_id, 6881, left)
                             .await
                         {
                             Ok(p) => {
@@ -189,6 +192,7 @@ impl TorrentDownloader {
                                         self.meta.info_hash.0,
                                         self.peer_id,
                                         6881,
+                                        left,
                                     )
                                     .await
                                 {
@@ -215,7 +219,7 @@ impl TorrentDownloader {
                     } else if tracker_url.starts_with("http://") {
                         info!("Trying HTTP tracker: {}", tracker_url);
                         match tracker
-                            .announce_http(tracker_url, self.meta.info_hash.0, self.peer_id, 6881)
+                            .announce_http(tracker_url, self.meta.info_hash.0, self.peer_id, 6881, left)
                             .await
                         {
                             Ok(p) => {
@@ -578,6 +582,7 @@ impl TorrentDownloader {
                             let block_len = block.len() as u64;
                             {
                                 let mut lock = self.state.lock().await;
+                                lock.last_download_time = Some(std::time::Instant::now());
                                 lock.downloaded = (lock.downloaded + block_len).min(lock.size);
                                 if lock.downloaded >= lock.size {
                                     lock.status = "Completed".to_string();
@@ -648,6 +653,7 @@ impl TorrentDownloader {
                                     }.serialize()).await?;
                                     tracing::info!("Successfully served piece {} block to peer!", index);
                                     let mut lock = self.state.lock().await;
+                                    lock.last_upload_time = Some(std::time::Instant::now());
                                     lock.uploaded += length as u64;
                                 } else {
                                     tracing::warn!("Failed to read piece {} from disk despite having it marked as complete!", index);
