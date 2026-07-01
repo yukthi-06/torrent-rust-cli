@@ -168,16 +168,16 @@ impl MagnetWorker {
                 info!("Announcing to tracker: {}", tr);
                 let res = if tr.starts_with("udp://") {
                     let host_port = tr.trim_start_matches("udp://");
-                    match tracker.announce_udp(host_port, info_hash, peer_id, 6881).await {
+                    match tracker.announce_udp(host_port, info_hash, peer_id, 6881, i64::MAX).await {
                         Ok(p) => Ok(p),
                         Err(e) => {
                             warn!("UDP tracker {} failed: {}, trying HTTP fallback", tr, e);
                             let http_fallback = tr.replace("udp://", "http://");
-                            tracker.announce_http(&http_fallback, info_hash, peer_id, 6881).await
+                            tracker.announce_http(&http_fallback, info_hash, peer_id, 6881, i64::MAX).await
                         }
                     }
                 } else if tr.starts_with("http://") {
-                    tracker.announce_http(&tr, info_hash, peer_id, 6881).await
+                    tracker.announce_http(&tr, info_hash, peer_id, 6881, i64::MAX).await
                 } else {
                     warn!("Skipping unsupported tracker: {}", tr);
                     return (tr, Ok(Vec::new()));

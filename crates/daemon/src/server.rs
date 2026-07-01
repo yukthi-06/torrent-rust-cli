@@ -703,24 +703,6 @@ impl RpcServer {
         Response::TorrentAdded { id: new_id }
     }
 
-    fn compute_display_status(t: &TorrentState) -> String {
-        let mut display = t.status.clone();
-        if display != "Checking" && display != "Paused" && display != "Fetching Metadata" {
-            let now = std::time::Instant::now();
-            let is_up = t.last_upload_time.map_or(false, |dt| now.duration_since(dt).as_secs() < 3);
-            let is_down = t.last_download_time.map_or(false, |dt| now.duration_since(dt).as_secs() < 3);
-            if is_up && is_down {
-                display = "Up/Down".to_string();
-            } else if is_up {
-                display = "Seeding".to_string();
-            } else if is_down {
-                display = "Downloading".to_string();
-            } else if t.downloaded >= t.size && t.size > 0 {
-                display = "Seeding".to_string();
-            }
-        }
-        display
-    }
 
     fn compute_display_status(t: &TorrentState) -> String {
         let mut display = t.status.clone();
