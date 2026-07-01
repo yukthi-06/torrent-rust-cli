@@ -22,6 +22,8 @@ pub struct TorrentDownloader {
     pub peer_id: [u8; 20],
     pub state: Arc<Mutex<super::server::TorrentState>>,
     pub missing_pieces: Arc<Mutex<Vec<u32>>>,
+    pub have_pieces: Arc<Mutex<Vec<bool>>>,
+    pub piece_broadcaster: tokio::sync::broadcast::Sender<u32>,
 }
 
 impl TorrentDownloader {
@@ -39,6 +41,8 @@ impl TorrentDownloader {
             peer_id,
             state,
             missing_pieces: Arc::new(Mutex::new(Vec::new())),
+            have_pieces: Arc::new(Mutex::new(vec![false; meta.info.pieces.len()])),
+            piece_broadcaster: tokio::sync::broadcast::channel(100).0,
         }
     }
 
@@ -80,6 +84,7 @@ impl TorrentDownloader {
         let is_completed = missing_list.is_empty();
         let first_missing_piece = missing_list.first().copied().unwrap_or(total_pieces);
         *self.missing_pieces.lock().await = missing_list;
+        *self.have_pieces.lock().await = completed_pieces.clone();
 
         let verified_downloaded =
             completed_pieces
@@ -404,25 +409,42 @@ impl TorrentDownloader {
         self: Arc<Self>,
         addr: SocketAddr,
     ) -> anyhow::Result<()> {
-        let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(addr)).await??;
-        self.handle_peer(&mut stream).await
+        let stream = timeout(Duration::from_secs(5), TcpStream::connect(addr)).await??;
+        self.handle_peer(stream).await
+    }
+
+    pub async fn handle_incoming_peer(
+        self: &Arc<Self>,
+        mut stream: TcpStream,
+        handshake: Handshake,
+    ) -> Result<(), anyhow::Error> {
+        let our_handshake = Handshake::new(self.meta.info_hash.0, self.peer_id);
+        stream.write_all(&our_handshake.serialize()).await?;
+        self.peer_loop(stream).await
     }
 
     async fn handle_peer(
-        &self,
-        stream: &mut TcpStream,
+        self: &Arc<Self>,
+        mut stream: TcpStream,
     ) -> Result<(), anyhow::Error> {
         // Handshake
         let handshake = Handshake::new(self.meta.info_hash.0, self.peer_id);
         stream.write_all(&handshake.serialize()).await?;
 
-        let server_handshake = timeout(Duration::from_secs(10), Handshake::read(stream))
+        let server_handshake = timeout(Duration::from_secs(10), Handshake::read(&mut stream))
             .await
             .map_err(|_| anyhow::anyhow!("Handshake timed out"))??;
         if server_handshake.info_hash != self.meta.info_hash.0 {
             anyhow::bail!("Info hash mismatch");
         }
 
+        self.peer_loop(stream).await
+    }
+
+    async fn peer_loop(
+        self: &Arc<Self>,
+        stream: TcpStream,
+    ) -> Result<(), anyhow::Error> {
         // Successfully connected! Track peer connection count
         {
             let mut lock = self.state.lock().await;
@@ -445,11 +467,24 @@ impl TorrentDownloader {
             state: Arc::clone(&self.state),
         };
 
+        let (mut reader, mut writer) = stream.into_split();
+
+        // Send Bitfield
+        let bitfield = {
+            let have = self.have_pieces.lock().await;
+            let mut bitfield_bytes = vec![0u8; (have.len() + 7) / 8];
+            for (i, &has_piece) in have.iter().enumerate() {
+                if has_piece {
+                    bitfield_bytes[i / 8] |= 1 << (7 - (i % 8));
+                }
+            }
+            bitfield_bytes
+        };
+        writer.write_all(&PeerMessage::Bitfield(bitfield).serialize()).await?;
+
         // Send Interested and Unchoke
-        stream
-            .write_all(&PeerMessage::Interested.serialize())
-            .await?;
-        stream.write_all(&PeerMessage::Unchoke.serialize()).await?;
+        writer.write_all(&PeerMessage::Interested.serialize()).await?;
+        writer.write_all(&PeerMessage::Unchoke.serialize()).await?;
 
         struct PieceGuard {
             state: Arc<Mutex<crate::server::TorrentState>>,
@@ -491,8 +526,6 @@ impl TorrentDownloader {
             if !lock.is_empty() {
                 piece_guard.piece_index = lock.remove(0);
                 piece_guard.is_complete = false;
-            } else {
-                return Ok(());
             }
         }
 
@@ -511,80 +544,118 @@ impl TorrentDownloader {
             16384.min(remaining_in_torrent).min(remaining_in_piece) as u32
         };
 
-        // Simple download loop from peer
+        let mut piece_rx = self.piece_broadcaster.subscribe();
+
         loop {
-            let msg = timeout(Duration::from_secs(15), PeerMessage::read(stream))
-                .await
-                .map_err(|_| anyhow::anyhow!("Peer read timed out"))??;
-            match msg {
-                PeerMessage::KeepAlive => {}
-                PeerMessage::Choke => {
-                    // Peer choked us. Currently we pause requests.
-                }
-                PeerMessage::Unchoke => {
-                    let req_len = get_request_length(piece_guard.piece_index, piece_guard.block_offset);
-                    if req_len > 0 {
-                        let req = PeerMessage::Request {
-                            index: piece_guard.piece_index,
-                            begin: piece_guard.block_offset,
-                            length: req_len,
-                        };
-                        stream.write_all(&req.serialize()).await?;
-                    }
-                }
-                PeerMessage::Piece {
-                    index,
-                    begin,
-                    block,
-                } => {
-                    // Write block to disk
-                    self.write_block(index, begin, &block)?;
-
-                    let block_len = block.len() as u64;
-                    {
-                        let mut lock = self.state.lock().await;
-                        lock.downloaded = (lock.downloaded + block_len).min(lock.size);
-                        if lock.downloaded >= lock.size {
-                            lock.status = "Completed".to_string();
-                        } else {
-                            lock.status = "Downloading".to_string();
+            tokio::select! {
+                msg_res = timeout(Duration::from_secs(15), PeerMessage::read(&mut reader)) => {
+                    let msg = msg_res.map_err(|_| anyhow::anyhow!("Peer read timed out"))??;
+                    match msg {
+                        PeerMessage::KeepAlive => {}
+                        PeerMessage::Choke => {}
+                        PeerMessage::Unchoke => {
+                            if !piece_guard.is_complete {
+                                let req_len = get_request_length(piece_guard.piece_index, piece_guard.block_offset);
+                                if req_len > 0 {
+                                    let req = PeerMessage::Request {
+                                        index: piece_guard.piece_index,
+                                        begin: piece_guard.block_offset,
+                                        length: req_len,
+                                    };
+                                    writer.write_all(&req.serialize()).await?;
+                                }
+                            }
                         }
-                    }
+                        PeerMessage::Piece {
+                            index,
+                            begin,
+                            block,
+                        } => {
+                            // Write block to disk
+                            self.write_block(index, begin, &block)?;
 
-                    // Advance to next block
-                    piece_guard.block_offset += block.len() as u32;
-                    let is_last_piece = piece_guard.piece_index == total_pieces - 1;
-                    let piece_target_size = if is_last_piece {
-                        let piece_start = piece_guard.piece_index as u64 * piece_length as u64;
-                        (total_size.saturating_sub(piece_start)) as u32
-                    } else {
-                        piece_length
-                    };
+                            let block_len = block.len() as u64;
+                            {
+                                let mut lock = self.state.lock().await;
+                                lock.downloaded = (lock.downloaded + block_len).min(lock.size);
+                                if lock.downloaded >= lock.size {
+                                    lock.status = "Completed".to_string();
+                                } else {
+                                    lock.status = "Downloading".to_string();
+                                }
+                            }
 
-                    if piece_guard.block_offset >= piece_target_size {
-                        piece_guard.is_complete = true;
-                        
-                        let mut lock = self.missing_pieces.lock().await;
-                        if !lock.is_empty() {
-                            piece_guard.piece_index = lock.remove(0);
-                            piece_guard.block_offset = 0;
-                            piece_guard.is_complete = false;
-                        } else {
-                            break Ok(());
+                            // Advance to next block
+                            piece_guard.block_offset += block.len() as u32;
+                            let is_last_piece = piece_guard.piece_index == total_pieces - 1;
+                            let piece_target_size = if is_last_piece {
+                                let piece_start = piece_guard.piece_index as u64 * piece_length as u64;
+                                (total_size.saturating_sub(piece_start)) as u32
+                            } else {
+                                piece_length
+                            };
+
+                            if piece_guard.block_offset >= piece_target_size {
+                                piece_guard.is_complete = true;
+                                
+                                // Broadcast!
+                                let _ = self.piece_broadcaster.send(piece_guard.piece_index);
+                                {
+                                    let mut lock = self.have_pieces.lock().await;
+                                    if let Some(h) = lock.get_mut(piece_guard.piece_index as usize) {
+                                        *h = true;
+                                    }
+                                }
+
+                                let mut lock = self.missing_pieces.lock().await;
+                                if !lock.is_empty() {
+                                    piece_guard.piece_index = lock.remove(0);
+                                    piece_guard.block_offset = 0;
+                                    piece_guard.is_complete = false;
+                                }
+                            }
+
+                            if !piece_guard.is_complete {
+                                let req_len = get_request_length(piece_guard.piece_index, piece_guard.block_offset);
+                                if req_len > 0 {
+                                    let req = PeerMessage::Request {
+                                        index: piece_guard.piece_index,
+                                        begin: piece_guard.block_offset,
+                                        length: req_len,
+                                    };
+                                    writer.write_all(&req.serialize()).await?;
+                                }
+                            }
                         }
-                    }
-
-                    let req_len = get_request_length(piece_guard.piece_index, piece_guard.block_offset);
-                    if req_len > 0 {
-                        let req = PeerMessage::Request {
-                            index: piece_guard.piece_index,
-                            begin: piece_guard.block_offset,
-                            length: req_len,
-                        };
-                        stream.write_all(&req.serialize()).await?;
+                        PeerMessage::Interested => {
+                            writer.write_all(&PeerMessage::Unchoke.serialize()).await?;
+                        }
+                        PeerMessage::Request { index, begin, length } => {
+                            let has = {
+                                let lock = self.have_pieces.lock().await;
+                                lock.get(index as usize).copied().unwrap_or(false)
+                            };
+                            if has {
+                                let offset = index as u64 * piece_length as u64 + begin as u64;
+                                if let Ok(data) = self.read_piece_from_disk(offset, length as usize) {
+                                    writer.write_all(&PeerMessage::Piece {
+                                        index,
+                                        begin,
+                                        block: data
+                                    }.serialize()).await?;
+                                    let mut lock = self.state.lock().await;
+                                    lock.uploaded += length as u64;
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
-                _ => {}
+                new_piece_res = piece_rx.recv() => {
+                    if let Ok(piece_idx) = new_piece_res {
+                        writer.write_all(&PeerMessage::Have { index: piece_idx }.serialize()).await?;
+                    }
+                }
             }
         }
     }

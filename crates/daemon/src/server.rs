@@ -67,12 +67,14 @@ pub struct TorrentState {
     pub info_hash: String,
     pub size: u64,
     pub downloaded: u64,
+    pub uploaded: u64,
     pub status: String,
     pub peers_connected: usize,
 }
 
 pub struct TorrentHandle {
     pub state: Arc<Mutex<TorrentState>>,
+    pub engine: Mutex<Option<Arc<crate::engine::TorrentDownloader>>>,
     pub worker_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
@@ -156,6 +158,7 @@ impl RpcServer {
 
                 let handle = Arc::new(TorrentHandle {
                     state: torrent_state,
+                    engine: Mutex::new(None),
                     worker_handle: Mutex::new(None),
                 });
                 {
@@ -224,6 +227,7 @@ impl RpcServer {
         }));
         let handle = Arc::new(TorrentHandle {
             state: torrent_state,
+            engine: Mutex::new(None), // Set below
             worker_handle: Mutex::new(None),
         });
         {
@@ -244,6 +248,7 @@ impl RpcServer {
             peer_id,
             Arc::clone(&handle.state),
         ));
+        *handle.engine.lock().await = Some(Arc::clone(&downloader));
         info!(
             "Resumed torrent ID {} (hashing pieces...)",
             id
@@ -301,6 +306,42 @@ impl RpcServer {
         self: Arc<Self>,
         mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) -> anyhow::Result<()> {
+        let peer_listener_server = Arc::clone(&self);
+        let mut peer_listener_shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            match tokio::net::TcpListener::bind("0.0.0.0:6881").await {
+                Ok(listener) => {
+                    info!("Global Peer Listener accepting connections on port 6881");
+                    loop {
+                        tokio::select! {
+                            accept_res = listener.accept() => {
+                                match accept_res {
+                                    Ok((stream, peer_addr)) => {
+                                        let s = Arc::clone(&peer_listener_server);
+                                        tokio::spawn(async move {
+                                            if let Err(e) = s.handle_incoming_peer(stream, peer_addr).await {
+                                                tracing::debug!("Incoming peer disconnected: {}", e);
+                                            }
+                                        });
+                                    }
+                                    Err(e) => {
+                                        error!("Peer listener accept error: {}", e);
+                                    }
+                                }
+                            }
+                            _ = peer_listener_shutdown.changed() => {
+                                info!("Peer listener shutting down.");
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to bind global peer listener on port 6881: {}", e);
+                }
+            }
+        });
+
         let path = get_ipc_path();
 
         #[cfg(unix)]
@@ -386,6 +427,41 @@ impl RpcServer {
             }
         }
 
+        Ok(())
+    }
+
+    async fn handle_incoming_peer(self: Arc<Self>, mut stream: tokio::net::TcpStream, peer_addr: std::net::SocketAddr) -> anyhow::Result<()> {
+        use std::time::Duration;
+        use tokio::time::timeout;
+        
+        let handshake = timeout(Duration::from_secs(10), torrent_peer::protocol::Handshake::read(&mut stream))
+            .await
+            .map_err(|_| anyhow::anyhow!("Handshake timed out"))??;
+            
+        let info_hash_hex = torrent_core::InfoHash(handshake.info_hash).to_string();
+        
+        let mut engine_opt = None;
+        {
+            let map = self.torrents.lock().await;
+            for handle in map.values() {
+                let state = handle.state.lock().await;
+                if state.info_hash == info_hash_hex {
+                    let engine = handle.engine.lock().await.clone();
+                    if let Some(e) = engine {
+                        engine_opt = Some(e);
+                    }
+                    break;
+                }
+            }
+        }
+        
+        if let Some(engine) = engine_opt {
+            tracing::info!("Accepted incoming peer {} for torrent {}", peer_addr, engine.meta.info.name);
+            engine.handle_incoming_peer(stream, handshake).await?;
+        } else {
+            tracing::warn!("Incoming peer {} requested unknown info_hash {}", peer_addr, info_hash_hex);
+        }
+        
         Ok(())
     }
 
@@ -487,6 +563,7 @@ impl RpcServer {
 
                 let handle = Arc::new(TorrentHandle {
                     state: torrent_state,
+                    engine: Mutex::new(None),
                     worker_handle: Mutex::new(None),
                 });
                 {
@@ -594,6 +671,7 @@ impl RpcServer {
 
         let handle = Arc::new(TorrentHandle {
             state: torrent_state,
+            engine: Mutex::new(None),
             worker_handle: Mutex::new(None),
         });
         {
@@ -633,7 +711,7 @@ impl RpcServer {
                         info_hash: t.info_hash.clone(),
                         size: t.size,
                         downloaded: t.downloaded,
-                        uploaded: 0,
+                        uploaded: t.uploaded,
                         status: t.status.clone(),
                         progress: if t.size > 0 {
                             ((t.downloaded as f32 / t.size as f32) * 100.0).min(100.0)
@@ -669,7 +747,7 @@ impl RpcServer {
                         info_hash: t.info_hash.clone(),
                         size: t.size,
                         downloaded: t.downloaded,
-                        uploaded: 0,
+                        uploaded: t.uploaded,
                         status: t.status.clone(),
                         progress: if t.size > 0 {
                             ((t.downloaded as f32 / t.size as f32) * 100.0).min(100.0)
